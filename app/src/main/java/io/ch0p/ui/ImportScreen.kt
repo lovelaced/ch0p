@@ -307,6 +307,11 @@ fun ImportScreen(onOpenModels: () -> Unit = {}) {
                         )
                     }
                 }
+                item {
+                    TimelineEditor(state.edl, AppTheme.haptics) { newEdl ->
+                        ui = state.copy(edl = newEdl)
+                    }
+                }
                 items(state.edl.units) { entry -> EdlRow(entry.order, entry.srcInMs, entry.srcOutMs) }
                 item { PrimaryButton("Render MP4") { runRender(state.preset, state.edl, state.cropTrajectory, state.captionChunks) } }
                 item { Text("Start over", style = t.label, color = c.textMid,
