@@ -5,14 +5,23 @@ import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.googlefonts.Font
+import androidx.compose.ui.text.googlefonts.GoogleFont
 import androidx.compose.ui.unit.sp
+import io.ch0p.R
 
-// Type scale. Numeric/timecode styles use a monospace family with tabular figures
-// so digits don't jitter as values change.
-// TODO(fonts): swap FontFamily.Default -> Inter and FontFamily.Monospace -> JetBrains Mono
-//   via androidx.compose.ui:ui-text-google-fonts (needs res/values/font_certs.xml).
-private val Sans = FontFamily.Default
-private val Mono = FontFamily.Monospace
+// Downloadable Google Fonts: Inter for UI, JetBrains Mono for timecodes/numbers.
+private val provider = GoogleFont.Provider(
+    providerAuthority = "com.google.android.gms.fonts",
+    providerPackage = "com.google.android.gms",
+    certificates = R.array.com_google_android_gms_fonts_certs,
+)
+
+private fun family(name: String, vararg weights: FontWeight) =
+    FontFamily(weights.map { Font(googleFont = GoogleFont(name), fontProvider = provider, weight = it) })
+
+private val Sans = family("Inter", FontWeight.Normal, FontWeight.Medium, FontWeight.SemiBold)
+private val Mono = family("JetBrains Mono", FontWeight.Normal, FontWeight.Medium)
 
 @Immutable
 data class AppTypography(
