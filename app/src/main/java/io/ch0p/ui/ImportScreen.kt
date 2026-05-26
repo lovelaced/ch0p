@@ -273,9 +273,7 @@ fun ImportScreen(onOpenModels: () -> Unit = {}) {
                         )
                     }
                 }
-                items(Presets.all) { preset ->
-                    PresetCard(preset) { runEdit(state.meta, state.proxy, preset) }
-                }
+                item { PresetPager(onSelect = { preset -> runEdit(state.meta, state.proxy, preset) }) }
             }
 
             is ImportUi.Analyzing -> {
