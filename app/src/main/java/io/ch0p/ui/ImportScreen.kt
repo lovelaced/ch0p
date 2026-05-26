@@ -36,6 +36,8 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import io.ch0p.analysis.AnalysisPipeline
+import io.ch0p.analysis.LlmEngine
+import io.ch0p.analysis.SemanticEditor
 import io.ch0p.edit.AutoEditor
 import io.ch0p.edit.EditDecisionList
 import io.ch0p.edit.Preset
@@ -69,7 +71,7 @@ private sealed interface ImportUi {
     data class Proxying(val meta: VideoMetadata) : ImportUi
     data class Ready(val meta: VideoMetadata, val proxy: File) : ImportUi
     data class Analyzing(val presetName: String) : ImportUi
-    data class Edited(val preset: Preset, val edl: EditDecisionList) : ImportUi
+    data class Edited(val preset: Preset, val edl: EditDecisionList, val title: String? = null) : ImportUi
     data class Rendering(val presetName: String) : ImportUi
     data class Rendered(val output: File) : ImportUi
     data class Failed(val message: String) : ImportUi
@@ -110,7 +112,7 @@ fun ImportScreen(onOpenModels: () -> Unit = {}) {
         analyzeStage = "Starting"
         scope.launch {
             ui = runCatching {
-                val analysis = withContext(Dispatchers.IO) {
+                withContext(Dispatchers.IO) {
                     // Telemetry comes from the ORIGINAL (the proxy transcode drops the gpmd track).
                     val telemetry = sourceUri?.let {
                         runCatching { TelemetryExtractor.extract(context, it) }.getOrNull()
@@ -121,12 +123,21 @@ fun ImportScreen(onOpenModels: () -> Unit = {}) {
                         ModelCatalog.byId(id)?.takeIf { store.isInstalled(it) }?.let { store.fileFor(it).absolutePath }
                     val yamnet = pathIfInstalled("yamnet")
                     val whisper = pathIfInstalled("whisper-small-q5") ?: pathIfInstalled("whisper-base-q5")
-                    AnalysisPipeline.analyze(
+                    val analysis = AnalysisPipeline.analyze(
                         context, proxy.absolutePath, meta.durationMs, meta.frameRate,
                         telemetry = telemetry, audioEventsModelPath = yamnet, whisperModelPath = whisper,
                     ) { f, s -> analyzeProgress = f; analyzeStage = s }
+                    val edl = AutoEditor.edit(analysis, preset)
+                    // Optional on-device LLM title (Gemma), if installed and we have a transcript.
+                    val title = pathIfInstalled("gemma3-1b")
+                        ?.takeIf { analysis.words.isNotEmpty() }
+                        ?.let { p ->
+                            analyzeStage = "Writing title"
+                            runCatching { LlmEngine(context, p).use { SemanticEditor(it).analyze(analysis.words).title } }
+                                .getOrNull()?.takeIf { it.isNotBlank() }
+                        }
+                    ImportUi.Edited(preset, edl, title)
                 }
-                ImportUi.Edited(preset, AutoEditor.edit(analysis, preset))
             }.getOrElse { ImportUi.Failed(it.message ?: "Analysis failed") }
         }
     }
@@ -265,9 +276,13 @@ fun ImportScreen(onOpenModels: () -> Unit = {}) {
                 item {
                     Column(Modifier.padding(vertical = Space.sm)) {
                         Text("${state.preset.displayName.uppercase(Locale.US)} · EDIT READY", style = t.micro, color = c.success)
+                        state.title?.let { title ->
+                            Text("“$title”", style = t.titleL, color = c.accentMagic, modifier = Modifier.padding(top = Space.xs))
+                        }
                         Text(
                             "${state.edl.units.size} clips · ${formatDuration(state.edl.totalDurationMs)} · ${state.preset.aspectRatio}",
-                            style = t.titleL, color = c.textHi, modifier = Modifier.padding(top = Space.xs),
+                            style = if (state.title != null) t.titleM else t.titleL,
+                            color = c.textHi, modifier = Modifier.padding(top = Space.xs),
                         )
                     }
                 }
