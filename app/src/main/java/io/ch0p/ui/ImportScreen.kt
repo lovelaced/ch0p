@@ -41,6 +41,8 @@ import io.ch0p.analysis.SemanticEditor
 import io.ch0p.edit.AutoEditor
 import io.ch0p.edit.EditDecisionList
 import io.ch0p.edit.Preset
+import io.ch0p.edit.captions.CaptionChunk
+import io.ch0p.edit.captions.CaptionChunker
 import io.ch0p.edit.reframe.CropKeyframe
 import io.ch0p.edit.Presets
 import io.ch0p.ingest.CodecSupport
@@ -77,6 +79,7 @@ private sealed interface ImportUi {
         val edl: EditDecisionList,
         val title: String? = null,
         val cropTrajectory: List<CropKeyframe> = emptyList(),
+        val captionChunks: List<CaptionChunk> = emptyList(),
     ) : ImportUi
     data class Rendering(val presetName: String) : ImportUi
     data class Rendered(val output: File) : ImportUi
@@ -99,12 +102,17 @@ fun ImportScreen(onOpenModels: () -> Unit = {}) {
     var analyzeStage by remember { mutableStateOf("") }
     var renderProgress by remember { mutableFloatStateOf(0f) }
 
-    fun runRender(preset: Preset, edl: EditDecisionList, cropTrajectory: List<CropKeyframe>) {
+    fun runRender(
+        preset: Preset,
+        edl: EditDecisionList,
+        cropTrajectory: List<CropKeyframe>,
+        captionChunks: List<CaptionChunk>,
+    ) {
         val src = sourceUri ?: run { ui = ImportUi.Failed("Lost the source file"); return }
         ui = ImportUi.Rendering(preset.displayName)
         renderProgress = 0f
         renderer.start(
-            src, edl, AspectRatio.parseOrDefault(preset.aspectRatio), cropTrajectory,
+            src, edl, AspectRatio.parseOrDefault(preset.aspectRatio), cropTrajectory, captionChunks,
             object : VideoRenderer.Callback {
                 override fun onComplete(output: File) { ui = ImportUi.Rendered(output) }
                 override fun onError(message: String, cause: Throwable?) { ui = ImportUi.Failed(message) }
@@ -145,7 +153,9 @@ fun ImportScreen(onOpenModels: () -> Unit = {}) {
                             runCatching { LlmEngine(context, p).use { SemanticEditor(it).analyze(analysis.words).title } }
                                 .getOrNull()?.takeIf { it.isNotBlank() }
                         }
-                    ImportUi.Edited(preset, edl, title, analysis.cropTrajectory)
+                    val captions = if (preset.captions && analysis.words.isNotEmpty())
+                        CaptionChunker.chunk(analysis.words) else emptyList()
+                    ImportUi.Edited(preset, edl, title, analysis.cropTrajectory, captions)
                 }
             }.getOrElse { ImportUi.Failed(it.message ?: "Analysis failed") }
         }
@@ -296,7 +306,7 @@ fun ImportScreen(onOpenModels: () -> Unit = {}) {
                     }
                 }
                 items(state.edl.units) { entry -> EdlRow(entry.order, entry.srcInMs, entry.srcOutMs) }
-                item { PrimaryButton("Render MP4") { runRender(state.preset, state.edl, state.cropTrajectory) } }
+                item { PrimaryButton("Render MP4") { runRender(state.preset, state.edl, state.cropTrajectory, state.captionChunks) } }
                 item { Text("Start over", style = t.label, color = c.textMid,
                     modifier = Modifier.fillMaxWidth().clickable { ui = ImportUi.Idle }.padding(Space.md)) }
             }

@@ -49,6 +49,7 @@ data class Preset(
     val qualityFloor: Float,       // θ — stop padding below this marginal value
     val beatSync: Boolean,
     val defaultTransition: TransitionType,
+    val captions: Boolean = true,   // burn karaoke captions when a transcript exists
 )
 
 object Presets {
@@ -69,7 +70,7 @@ object Presets {
         ordering = Ordering.BUILD_TO_CLIMAX,
         weights = SignalWeights.of(0.25f, 0.05f, 0.05f, 0.00f, 0.20f, 0.35f, 0.10f),
         diversityLambda = 0.4f, coverageGamma = 0.25f, qualityFloor = 0.22f,
-        beatSync = false, defaultTransition = TransitionType.DISSOLVE,
+        beatSync = false, defaultTransition = TransitionType.DISSOLVE, captions = false,
     )
 
     val PROMO = Preset(
@@ -99,7 +100,7 @@ object Presets {
         ordering = Ordering.BUILD_TO_CLIMAX,
         weights = SignalWeights.of(0.00f, 0.40f, 0.00f, 0.00f, 0.15f, 0.10f, 0.35f),
         diversityLambda = 0.6f, coverageGamma = 0.20f, qualityFloor = 0.20f,
-        beatSync = true, defaultTransition = TransitionType.SPEED_RAMP,
+        beatSync = true, defaultTransition = TransitionType.SPEED_RAMP, captions = false,
     )
 
     val TALKING_HEAD = Preset(

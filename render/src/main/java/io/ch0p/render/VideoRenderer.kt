@@ -2,10 +2,13 @@ package io.ch0p.render
 
 import android.content.Context
 import android.net.Uri
+import androidx.media3.common.Effect
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MimeTypes
 import androidx.media3.common.util.UnstableApi
+import androidx.media3.effect.OverlayEffect
 import androidx.media3.effect.Presentation
+import androidx.media3.effect.TextureOverlay
 import androidx.media3.transformer.Composition
 import androidx.media3.transformer.EditedMediaItem
 import androidx.media3.transformer.EditedMediaItemSequence
@@ -14,7 +17,9 @@ import androidx.media3.transformer.ExportException
 import androidx.media3.transformer.ExportResult
 import androidx.media3.transformer.ProgressHolder
 import androidx.media3.transformer.Transformer
+import com.google.common.collect.ImmutableList
 import io.ch0p.edit.EditDecisionList
+import io.ch0p.edit.captions.CaptionChunk
 import io.ch0p.edit.reframe.CropKeyframe
 import java.io.File
 import java.util.UUID
@@ -50,6 +55,7 @@ class VideoRenderer(private val context: Context) {
         edl: EditDecisionList,
         aspect: Float,
         cropTrajectory: List<CropKeyframe> = emptyList(),
+        captionChunks: List<CaptionChunk> = emptyList(),
         callback: Callback,
     ): File {
         require(edl.units.isNotEmpty()) { "empty EDL" }
@@ -69,10 +75,12 @@ class VideoRenderer(private val context: Context) {
                         .build(),
                 )
                 .build()
-            val videoEffects = if (cropTrajectory.isNotEmpty()) {
-                listOf(ReframeEffect(cropTrajectory, entry.srcInMs), presentation)
-            } else {
-                listOf(presentation)
+            val videoEffects = buildList<Effect> {
+                if (cropTrajectory.isNotEmpty()) add(ReframeEffect(cropTrajectory, entry.srcInMs))
+                add(presentation)
+                if (captionChunks.isNotEmpty()) {
+                    add(OverlayEffect(ImmutableList.of<TextureOverlay>(CaptionOverlay(captionChunks, entry.srcInMs))))
+                }
             }
             EditedMediaItem.Builder(mediaItem)
                 .setEffects(Effects(emptyList(), videoEffects))
