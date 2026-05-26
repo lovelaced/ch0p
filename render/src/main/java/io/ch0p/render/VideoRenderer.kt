@@ -15,6 +15,7 @@ import androidx.media3.transformer.ExportResult
 import androidx.media3.transformer.ProgressHolder
 import androidx.media3.transformer.Transformer
 import io.ch0p.edit.EditDecisionList
+import io.ch0p.edit.reframe.CropKeyframe
 import java.io.File
 import java.util.UUID
 
@@ -39,8 +40,18 @@ class VideoRenderer(private val context: Context) {
 
     private fun exportsDir(): File = File(context.filesDir, "exports").apply { mkdirs() }
 
-    /** @param aspect width/height (e.g. 9f/16f). */
-    fun start(sourceUri: Uri, edl: EditDecisionList, aspect: Float, callback: Callback): File {
+    /**
+     * @param aspect width/height (e.g. 9f/16f).
+     * @param cropTrajectory optional smart-reframe path; when present each clip pans/zooms
+     *   to follow the subject before the aspect-crop. Empty = static center-crop.
+     */
+    fun start(
+        sourceUri: Uri,
+        edl: EditDecisionList,
+        aspect: Float,
+        cropTrajectory: List<CropKeyframe> = emptyList(),
+        callback: Callback,
+    ): File {
         require(edl.units.isNotEmpty()) { "empty EDL" }
         val outFile = File(exportsDir(), "${UUID.randomUUID()}_${edl.presetId}.mp4")
 
@@ -58,8 +69,13 @@ class VideoRenderer(private val context: Context) {
                         .build(),
                 )
                 .build()
+            val videoEffects = if (cropTrajectory.isNotEmpty()) {
+                listOf(ReframeEffect(cropTrajectory, entry.srcInMs), presentation)
+            } else {
+                listOf(presentation)
+            }
             EditedMediaItem.Builder(mediaItem)
-                .setEffects(Effects(emptyList(), listOf(presentation)))
+                .setEffects(Effects(emptyList(), videoEffects))
                 .build()
         }
 

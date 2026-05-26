@@ -48,4 +48,27 @@ class ReframeTest {
     @Test fun `empty targets yield empty trajectory`() {
         assertTrue(CropTrajectory.build(emptyList(), emptyList()).isEmpty())
     }
+
+    @Test fun `reframe params center the subject`() {
+        val centered = Reframe.params(0.5f, 0.5f)
+        assertEquals(0f, centered.tx, 1e-4f)
+        assertEquals(0f, centered.ty, 1e-4f)
+        // subject on the right -> pan left (negative tx), clamped
+        val right = Reframe.params(1.0f, 0.5f)
+        assertTrue(right.tx < 0f)
+        assertTrue(right.tx >= -Reframe.MAX_PAN_X - 1e-4f)
+        // subject on the left -> pan right
+        assertTrue(Reframe.params(0.0f, 0.5f).tx > 0f)
+    }
+
+    @Test fun `sampleAt interpolates between keyframes`() {
+        val kfs = listOf(
+            CropKeyframe(0.0, 0.2, 0.5, 0.6),
+            CropKeyframe(2.0, 0.8, 0.5, 0.6),
+        )
+        assertEquals(0.5, CropTrajectory.sampleAt(kfs, 1.0)!!.cx, 1e-6)   // midpoint
+        assertEquals(0.2, CropTrajectory.sampleAt(kfs, -1.0)!!.cx, 1e-6)  // clamp start
+        assertEquals(0.8, CropTrajectory.sampleAt(kfs, 9.0)!!.cx, 1e-6)   // clamp end
+        assertEquals(null, CropTrajectory.sampleAt(emptyList(), 1.0))
+    }
 }

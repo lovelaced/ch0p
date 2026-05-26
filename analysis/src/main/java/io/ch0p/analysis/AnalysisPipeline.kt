@@ -47,6 +47,7 @@ object AnalysisPipeline {
         val faceAnalyzer = faceModelPath?.takeIf { File(it).exists() }
             ?.let { runCatching { FaceAnalyzer(context, it) }.getOrNull() }
         val faceScores = ArrayList<Float>()
+        val faceTargets = ArrayList<io.ch0p.edit.reframe.SubjectTarget>()
         val (motion, sharp, color, cuts) = try {
             retriever.setDataSource(proxyPath)
             val srcW = meta(retriever, MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH) ?: 16
@@ -63,7 +64,11 @@ object AnalysisPipeline {
                     )
                     if (bmp != null) {
                         if (faceAnalyzer != null) {
-                            faceScores.add(runCatching { faceAnalyzer.detect(bmp).score }.getOrDefault(0f))
+                            val ff = runCatching { faceAnalyzer.detect(bmp) }.getOrDefault(FaceScoring.EMPTY)
+                            faceScores.add(ff.score)
+                            if (ff.hasFace) faceTargets.add(
+                                io.ch0p.edit.reframe.SubjectTarget(tMs / 1000.0, ff.cx.toDouble(), ff.cy.toDouble(), ff.size.toDouble()),
+                            )
                         }
                         na.pushFrame(bitmapToRgb(bmp), bmp.width, bmp.height, tMs / 1000.0)
                         bmp.recycle()
@@ -138,6 +143,8 @@ object AnalysisPipeline {
             aesthetic = aesthetic,
             interest = interest,
             words = transcript,
+            cropTrajectory = if (faceTargets.size >= 2)
+                io.ch0p.edit.reframe.CropTrajectory.build(faceTargets, cuts.toList()) else emptyList(),
         )
     }
 

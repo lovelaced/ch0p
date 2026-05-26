@@ -62,4 +62,22 @@ object CropTrajectory {
         val d = to - from
         return if (abs(d) <= maxStep) to else from + maxStep * (if (d > 0) 1 else -1)
     }
+
+    /** Interpolate the trajectory at [timeSec] (clamped at the ends). Pure & testable. */
+    fun sampleAt(keyframes: List<CropKeyframe>, timeSec: Double): CropKeyframe? {
+        if (keyframes.isEmpty()) return null
+        if (timeSec <= keyframes.first().timeSec) return keyframes.first()
+        if (timeSec >= keyframes.last().timeSec) return keyframes.last()
+        for (i in 0 until keyframes.size - 1) {
+            val a = keyframes[i]; val b = keyframes[i + 1]
+            if (timeSec >= a.timeSec && timeSec <= b.timeSec) {
+                val span = (b.timeSec - a.timeSec).takeIf { it > 1e-9 } ?: return a
+                val t = (timeSec - a.timeSec) / span
+                return CropKeyframe(timeSec, lerp(a.cx, b.cx, t), lerp(a.cy, b.cy, t), lerp(a.size, b.size, t))
+            }
+        }
+        return keyframes.last()
+    }
+
+    private fun lerp(a: Double, b: Double, t: Double) = a + (b - a) * t
 }

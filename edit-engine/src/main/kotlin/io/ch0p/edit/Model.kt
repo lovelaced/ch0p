@@ -1,5 +1,7 @@
 package io.ch0p.edit
 
+import io.ch0p.edit.reframe.CropKeyframe
+
 /**
  * Analysis output for one source clip — the input to the editing brain.
  *
@@ -21,6 +23,7 @@ class Analysis(
     val interest: FloatArray,
     val words: List<Word> = emptyList(),
     val beatsMs: LongArray = LongArray(0),
+    val cropTrajectory: List<CropKeyframe> = emptyList(),  // smart-reframe path (subject-following)
 ) {
     init {
         require(shots.isNotEmpty()) { "Analysis needs at least one shot" }

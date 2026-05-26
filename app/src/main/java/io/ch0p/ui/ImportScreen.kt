@@ -41,6 +41,7 @@ import io.ch0p.analysis.SemanticEditor
 import io.ch0p.edit.AutoEditor
 import io.ch0p.edit.EditDecisionList
 import io.ch0p.edit.Preset
+import io.ch0p.edit.reframe.CropKeyframe
 import io.ch0p.edit.Presets
 import io.ch0p.ingest.CodecSupport
 import io.ch0p.ingest.IngestRisk
@@ -71,7 +72,12 @@ private sealed interface ImportUi {
     data class Proxying(val meta: VideoMetadata) : ImportUi
     data class Ready(val meta: VideoMetadata, val proxy: File) : ImportUi
     data class Analyzing(val presetName: String) : ImportUi
-    data class Edited(val preset: Preset, val edl: EditDecisionList, val title: String? = null) : ImportUi
+    data class Edited(
+        val preset: Preset,
+        val edl: EditDecisionList,
+        val title: String? = null,
+        val cropTrajectory: List<CropKeyframe> = emptyList(),
+    ) : ImportUi
     data class Rendering(val presetName: String) : ImportUi
     data class Rendered(val output: File) : ImportUi
     data class Failed(val message: String) : ImportUi
@@ -93,12 +99,12 @@ fun ImportScreen(onOpenModels: () -> Unit = {}) {
     var analyzeStage by remember { mutableStateOf("") }
     var renderProgress by remember { mutableFloatStateOf(0f) }
 
-    fun runRender(preset: Preset, edl: EditDecisionList) {
+    fun runRender(preset: Preset, edl: EditDecisionList, cropTrajectory: List<CropKeyframe>) {
         val src = sourceUri ?: run { ui = ImportUi.Failed("Lost the source file"); return }
         ui = ImportUi.Rendering(preset.displayName)
         renderProgress = 0f
         renderer.start(
-            src, edl, AspectRatio.parseOrDefault(preset.aspectRatio),
+            src, edl, AspectRatio.parseOrDefault(preset.aspectRatio), cropTrajectory,
             object : VideoRenderer.Callback {
                 override fun onComplete(output: File) { ui = ImportUi.Rendered(output) }
                 override fun onError(message: String, cause: Throwable?) { ui = ImportUi.Failed(message) }
@@ -139,7 +145,7 @@ fun ImportScreen(onOpenModels: () -> Unit = {}) {
                             runCatching { LlmEngine(context, p).use { SemanticEditor(it).analyze(analysis.words).title } }
                                 .getOrNull()?.takeIf { it.isNotBlank() }
                         }
-                    ImportUi.Edited(preset, edl, title)
+                    ImportUi.Edited(preset, edl, title, analysis.cropTrajectory)
                 }
             }.getOrElse { ImportUi.Failed(it.message ?: "Analysis failed") }
         }
@@ -290,7 +296,7 @@ fun ImportScreen(onOpenModels: () -> Unit = {}) {
                     }
                 }
                 items(state.edl.units) { entry -> EdlRow(entry.order, entry.srcInMs, entry.srcOutMs) }
-                item { PrimaryButton("Render MP4") { runRender(state.preset, state.edl) } }
+                item { PrimaryButton("Render MP4") { runRender(state.preset, state.edl, state.cropTrajectory) } }
                 item { Text("Start over", style = t.label, color = c.textMid,
                     modifier = Modifier.fillMaxWidth().clickable { ui = ImportUi.Idle }.padding(Space.md)) }
             }
