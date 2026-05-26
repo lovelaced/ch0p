@@ -91,6 +91,7 @@ private sealed interface ImportUi {
 
 @Composable
 fun ImportScreen(onOpenModels: () -> Unit = {}) {
+    val haptics = AppTheme.haptics
     val c = AppTheme.colors
     val t = AppTheme.type
     val context = LocalContext.current
@@ -288,7 +289,7 @@ fun ImportScreen(onOpenModels: () -> Unit = {}) {
                         )
                     }
                 }
-                item { PresetPager(onSelect = { preset -> runEdit(state.meta, state.proxy, preset) }) }
+                item { PresetPager(onSelect = { preset -> haptics.confirm(); runEdit(state.meta, state.proxy, preset) }) }
             }
 
             is ImportUi.Analyzing -> Unit  // rendered full-screen above
@@ -336,6 +337,7 @@ fun ImportScreen(onOpenModels: () -> Unit = {}) {
             }
 
             is ImportUi.Rendered -> {
+                item { LaunchedEffect(Unit) { haptics.confirm() } }  // satisfying terminal confirm
                 item {
                     Column(Modifier.padding(vertical = Space.sm)) {
                         Text("EXPORT COMPLETE", style = t.micro, color = c.success)
