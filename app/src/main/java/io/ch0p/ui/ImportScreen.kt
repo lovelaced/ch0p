@@ -117,11 +117,13 @@ fun ImportScreen(onOpenModels: () -> Unit = {}) {
                     }
                     // Optional models: pass a path only if installed (else the channel stays silent).
                     val store = ModelStore(context)
-                    val yamnet = ModelCatalog.byId("yamnet")
-                        ?.takeIf { store.isInstalled(it) }?.let { store.fileFor(it).absolutePath }
+                    fun pathIfInstalled(id: String) =
+                        ModelCatalog.byId(id)?.takeIf { store.isInstalled(it) }?.let { store.fileFor(it).absolutePath }
+                    val yamnet = pathIfInstalled("yamnet")
+                    val whisper = pathIfInstalled("whisper-small-q5") ?: pathIfInstalled("whisper-base-q5")
                     AnalysisPipeline.analyze(
                         context, proxy.absolutePath, meta.durationMs, meta.frameRate,
-                        telemetry = telemetry, audioEventsModelPath = yamnet,
+                        telemetry = telemetry, audioEventsModelPath = yamnet, whisperModelPath = whisper,
                     ) { f, s -> analyzeProgress = f; analyzeStage = s }
                 }
                 ImportUi.Edited(preset, AutoEditor.edit(analysis, preset))

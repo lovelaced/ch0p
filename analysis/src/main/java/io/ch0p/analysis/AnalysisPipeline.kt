@@ -38,6 +38,7 @@ object AnalysisPipeline {
         frameRate: Double,
         telemetry: Telemetry? = null,
         audioEventsModelPath: String? = null,
+        whisperModelPath: String? = null,
         progress: Progress = Progress { _, _ -> },
     ): Analysis {
         val retriever = MediaMetadataRetriever()
@@ -81,6 +82,12 @@ object AnalysisPipeline {
             }.getOrDefault(FloatArray(0))
         } else FloatArray(0)
 
+        // Whisper ASR (word-timed transcript) — only if a GGML model is installed.
+        val transcript: List<io.ch0p.edit.Word> = if (whisperModelPath != null && File(whisperModelPath).exists()) {
+            progress.onProgress(0.9f, "Transcribing")
+            runCatching { Whisper(whisperModelPath).use { it.transcribe(pcm) } }.getOrDefault(emptyList())
+        } else emptyList()
+
         progress.onProgress(0.95f, "Assembling")
         val aesthetic = fuseNormalized(sharp, color, n)
         var action = clampLen(motion, n)
@@ -111,6 +118,7 @@ object AnalysisPipeline {
             drama = drama,
             aesthetic = aesthetic,
             interest = interest,
+            words = transcript,
         )
     }
 
