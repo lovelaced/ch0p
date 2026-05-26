@@ -44,6 +44,7 @@ dependencies {
     implementation(libs.mediapipe.tasks.vision)  // face detection
     implementation(libs.mediapipe.tasks.genai)   // on-device LLM (Gemma)
     implementation(libs.onnxruntime.android)     // Silero VAD
+    implementation(libs.tensorflow.lite)         // NIMA aesthetic
 
     testImplementation(libs.junit)
 }

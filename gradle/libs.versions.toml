@@ -10,6 +10,7 @@ splashscreen = "1.0.1"
 media3 = "1.10.1"
 mediapipe = "0.10.35"
 onnxruntime = "1.26.0"
+tflite = "2.17.0"
 junit = "4.13.2"
 
 [libraries]
@@ -33,6 +34,7 @@ mediapipe-tasks-audio = { group = "com.google.mediapipe", name = "tasks-audio", 
 mediapipe-tasks-vision = { group = "com.google.mediapipe", name = "tasks-vision", version.ref = "mediapipe" }
 mediapipe-tasks-genai = { group = "com.google.mediapipe", name = "tasks-genai", version.ref = "mediapipe" }
 onnxruntime-android = { group = "com.microsoft.onnxruntime", name = "onnxruntime-android", version.ref = "onnxruntime" }
+tensorflow-lite = { group = "org.tensorflow", name = "tensorflow-lite", version.ref = "tflite" }
 junit = { group = "junit", name = "junit", version.ref = "junit" }
 
 [plugins]

@@ -41,6 +41,7 @@ object AnalysisPipeline {
         whisperModelPath: String? = null,
         faceModelPath: String? = null,
         sileroModelPath: String? = null,
+        nimaModelPath: String? = null,
         progress: Progress = Progress { _, _ -> },
     ): Analysis {
         val retriever = MediaMetadataRetriever()
@@ -48,6 +49,9 @@ object AnalysisPipeline {
             ?.let { runCatching { FaceAnalyzer(context, it) }.getOrNull() }
         val faceScores = ArrayList<Float>()
         val faceTargets = ArrayList<io.ch0p.edit.reframe.SubjectTarget>()
+        val nimaScorer = nimaModelPath?.takeIf { File(it).exists() }
+            ?.let { runCatching { NimaScorer(it) }.getOrNull() }
+        val nimaScores = ArrayList<Float>()
         val (motion, sharp, color, cuts) = try {
             retriever.setDataSource(proxyPath)
             val srcW = meta(retriever, MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH) ?: 16
@@ -70,6 +74,9 @@ object AnalysisPipeline {
                                 io.ch0p.edit.reframe.SubjectTarget(tMs / 1000.0, ff.cx.toDouble(), ff.cy.toDouble(), ff.size.toDouble()),
                             )
                         }
+                        if (nimaScorer != null) {
+                            nimaScores.add(runCatching { nimaScorer.score(bmp) }.getOrDefault(0f))
+                        }
                         na.pushFrame(bitmapToRgb(bmp), bmp.width, bmp.height, tMs / 1000.0)
                         bmp.recycle()
                     }
@@ -80,6 +87,7 @@ object AnalysisPipeline {
             }
         } finally {
             runCatching { faceAnalyzer?.close() }
+            runCatching { nimaScorer?.close() }
             runCatching { retriever.release() }
         }
 
@@ -107,7 +115,12 @@ object AnalysisPipeline {
         } else emptyList()
 
         progress.onProgress(0.95f, "Assembling")
-        val aesthetic = fuseNormalized(sharp, color, n)
+        var aesthetic = fuseNormalized(sharp, color, n)
+        // NIMA learned aesthetic blends with the classical metrics when installed.
+        if (nimaScores.isNotEmpty()) {
+            val nima = clampLen(nimaScores.toFloatArray(), n)
+            aesthetic = FloatArray(n) { 0.5f * aesthetic[it] + 0.5f * nima[it] }
+        }
         var action = clampLen(motion, n)
         val loudness = resampleTo(loudHi, n)
         val speech = resampleTo(speechHi, n)

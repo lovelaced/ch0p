@@ -139,10 +139,12 @@ fun ImportScreen(onOpenModels: () -> Unit = {}) {
                     val whisper = pathIfInstalled("whisper-small-q5") ?: pathIfInstalled("whisper-base-q5")
                     val face = pathIfInstalled("blazeface-short")
                     val silero = pathIfInstalled("silero-vad")
+                    val nima = pathIfInstalled("nima-mobilenet")
                     val analysis = AnalysisPipeline.analyze(
                         context, proxy.absolutePath, meta.durationMs, meta.frameRate,
                         telemetry = telemetry, audioEventsModelPath = yamnet,
-                        whisperModelPath = whisper, faceModelPath = face, sileroModelPath = silero,
+                        whisperModelPath = whisper, faceModelPath = face,
+                        sileroModelPath = silero, nimaModelPath = nima,
                     ) { f, s -> analyzeProgress = f; analyzeStage = s }
                     val edl = AutoEditor.edit(analysis, preset)
                     // Optional on-device LLM title (Gemma), if installed and we have a transcript.
