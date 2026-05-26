@@ -14,4 +14,24 @@ object AutoEditor {
         val selected = Selection.select(scored, preset, analysis.durationMs)
         return Arrange.arrange(selected, preset)
     }
+
+    /**
+     * Produce several distinct shorts from one source (like Opus/Vizard's multi-clip
+     * output). Each variant draws from a candidate pool with the previous variants'
+     * units removed, so the cuts cover different moments. The first variant is the
+     * strongest; returns fewer than [count] when material runs out.
+     */
+    fun editVariants(analysis: Analysis, preset: Preset, count: Int = 3): List<EditDecisionList> {
+        val units = Segmentation.segment(analysis, preset)
+        val pool = Scoring.score(analysis, units, preset).toMutableList()
+        val results = ArrayList<EditDecisionList>()
+        repeat(count) {
+            if (pool.isEmpty()) return results
+            val selected = Selection.select(pool, preset, analysis.durationMs)
+            if (selected.isEmpty()) return results
+            results.add(Arrange.arrange(selected, preset))
+            pool.removeAll(selected.toSet())
+        }
+        return results
+    }
 }

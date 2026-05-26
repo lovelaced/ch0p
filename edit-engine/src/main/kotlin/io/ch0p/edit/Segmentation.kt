@@ -35,10 +35,13 @@ object Segmentation {
         if (nPieces == 1) return listOf(EditUnit(shot.startMs, shot.endMs, idx))
 
         val window = min(preset.avgShotLenMs / 2, 800L)
+        val sentenceEnds = if (a.words.isNotEmpty()) Transcript.sentenceEndTimes(a.words) else emptyList()
         val cuts = ArrayList<Long>()
         for (i in 1 until nPieces) {
             val target = shot.startMs + dur * i / nPieces
-            var c = snapToTrough(a, target, window, shot.startMs, shot.endMs)
+            // Prefer a sentence boundary in-window (cleanest cut); else an audio trough.
+            var c = nearestSentenceEnd(sentenceEnds, target, window)
+                ?: snapToTrough(a, target, window, shot.startMs, shot.endMs)
             c = avoidMidWord(a.words, c)
             cuts += c.coerceIn(shot.startMs, shot.endMs)
         }
@@ -72,6 +75,10 @@ object Segmentation {
         }
         return bestMs
     }
+
+    /** Nearest sentence-end within [windowMs] of the target, or null. */
+    private fun nearestSentenceEnd(ends: List<Long>, targetMs: Long, windowMs: Long): Long? =
+        ends.filter { kotlin.math.abs(it - targetMs) <= windowMs }.minByOrNull { kotlin.math.abs(it - targetMs) }
 
     /** If [ms] lands inside a spoken word, push it to that word's nearest edge. */
     private fun avoidMidWord(words: List<Word>, ms: Long): Long {

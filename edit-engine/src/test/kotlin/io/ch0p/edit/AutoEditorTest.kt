@@ -138,6 +138,19 @@ class AutoEditorTest {
         assertTrue("cannot exceed source length", edl.totalDurationMs <= 8_000)
     }
 
+    @Test fun `editVariants yields distinct non-overlapping shorts`() {
+        val a = baseAnalysis(durationMs = 120_000, shotLenMs = 10_000) {
+            it["interest"]!!.hot(5_000, 14_000, 0.9f)
+            it["action"]!!.hot(40_000, 50_000, 0.9f)
+            it["aesthetic"]!!.hot(80_000, 95_000, 0.9f)
+        }
+        val variants = AutoEditor.editVariants(a, Presets.TIKTOK, count = 3)
+        assertTrue("should yield at least 2 variants from 2min", variants.size >= 2)
+        // No source range is reused across variants.
+        val ranges = variants.flatMap { v -> v.units.map { it.srcInMs to it.srcOutMs } }
+        assertEquals("variants must not share source ranges", ranges.size, ranges.toSet().size)
+    }
+
     @Test fun `all six presets run without error`() {
         val a = baseAnalysis {
             it["action"]!!.hot(5_000, 12_000, 0.8f)
