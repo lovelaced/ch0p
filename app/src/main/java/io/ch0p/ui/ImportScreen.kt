@@ -25,6 +25,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -100,6 +101,9 @@ fun ImportScreen(onOpenModels: () -> Unit = {}) {
     var proxyProgress by remember { mutableFloatStateOf(0f) }
     var analyzeProgress by remember { mutableFloatStateOf(0f) }
     var analyzeStage by remember { mutableStateOf("") }
+    var analyzeScenes by remember { mutableIntStateOf(0) }
+    var analyzeFaces by remember { mutableIntStateOf(0) }
+    var analyzeLaughs by remember { mutableIntStateOf(0) }
     var renderProgress by remember { mutableFloatStateOf(0f) }
 
     fun runRender(
@@ -145,7 +149,10 @@ fun ImportScreen(onOpenModels: () -> Unit = {}) {
                         telemetry = telemetry, audioEventsModelPath = yamnet,
                         whisperModelPath = whisper, faceModelPath = face,
                         sileroModelPath = silero, nimaModelPath = nima,
-                    ) { f, s -> analyzeProgress = f; analyzeStage = s }
+                    ) { p ->
+                        analyzeProgress = p.fraction; analyzeStage = p.stage
+                        analyzeScenes = p.scenes; analyzeFaces = p.faces; analyzeLaughs = p.laughs
+                    }
                     val edl = AutoEditor.edit(analysis, preset)
                     // Optional on-device LLM title (Gemma), if installed and we have a transcript.
                     val title = pathIfInstalled("gemma3-1b")
@@ -176,6 +183,12 @@ fun ImportScreen(onOpenModels: () -> Unit = {}) {
                 ImportUi.Probed(uri, meta, CodecSupport.assessRisk(meta))
             }.getOrElse { ImportUi.Failed(it.message ?: "Could not read this file") }
         }
+    }
+
+    // The Analyzing state is a full-screen signature takeover, not a list item.
+    (ui as? ImportUi.Analyzing)?.let { a ->
+        AnalyzingScreen(a.presetName, analyzeProgress, analyzeStage, analyzeScenes, analyzeFaces, analyzeLaughs)
+        return
     }
 
     LazyColumn(
@@ -276,20 +289,7 @@ fun ImportScreen(onOpenModels: () -> Unit = {}) {
                 item { PresetPager(onSelect = { preset -> runEdit(state.meta, state.proxy, preset) }) }
             }
 
-            is ImportUi.Analyzing -> {
-                item {
-                    Column(Modifier.padding(vertical = Space.sm)) {
-                        Text(state.presetName.uppercase(Locale.US), style = t.micro, color = c.accentMagic)
-                        Text(analyzeStage, style = t.titleM, color = c.textHi, modifier = Modifier.padding(top = Space.xs))
-                        LinearProgressIndicator(
-                            progress = { analyzeProgress.coerceIn(0f, 1f) },
-                            color = c.accentMagic,
-                            trackColor = c.surface2,
-                            modifier = Modifier.fillMaxWidth().padding(top = Space.sm),
-                        )
-                    }
-                }
-            }
+            is ImportUi.Analyzing -> Unit  // rendered full-screen above
 
             is ImportUi.Edited -> {
                 item {

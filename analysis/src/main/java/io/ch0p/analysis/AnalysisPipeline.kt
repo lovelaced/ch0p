@@ -27,8 +27,17 @@ object AnalysisPipeline {
     private const val SAMPLE_FPS = 4.0
     private const val ANALYZE_WIDTH = 160  // downscale frames for cheap native analysis
 
+    /** Live telemetry for the Analyzing screen — counts populate as stages complete. */
+    data class AnalysisProgress(
+        val fraction: Float,
+        val stage: String,
+        val scenes: Int = 0,
+        val faces: Int = 0,
+        val laughs: Int = 0,
+    )
+
     fun interface Progress {
-        fun onProgress(fraction: Float, stage: String)
+        fun onProgress(p: AnalysisProgress)
     }
 
     fun analyze(
@@ -42,7 +51,7 @@ object AnalysisPipeline {
         faceModelPath: String? = null,
         sileroModelPath: String? = null,
         nimaModelPath: String? = null,
-        progress: Progress = Progress { _, _ -> },
+        progress: Progress = Progress { },
     ): Analysis {
         val retriever = MediaMetadataRetriever()
         val faceAnalyzer = faceModelPath?.takeIf { File(it).exists() }
@@ -80,7 +89,9 @@ object AnalysisPipeline {
                         na.pushFrame(bitmapToRgb(bmp), bmp.width, bmp.height, tMs / 1000.0)
                         bmp.recycle()
                     }
-                    if (durationMs > 0) progress.onProgress((tMs.toFloat() / durationMs) * 0.8f, "Analyzing video")
+                    if (durationMs > 0) progress.onProgress(
+                        AnalysisProgress((tMs.toFloat() / durationMs) * 0.8f, "Analyzing video", faces = faceTargets.size),
+                    )
                     tMs += stepMs
                 }
                 NativeResult(na.motionCurve(), na.sharpnessCurve(), na.colorfulnessCurve(), na.cutTimesSec())
@@ -92,7 +103,9 @@ object AnalysisPipeline {
         }
 
         val n = motion.size
-        progress.onProgress(0.85f, "Analyzing audio")
+        val sceneCount = cuts.size + 1
+        val faceCount = faceTargets.size
+        progress.onProgress(AnalysisProgress(0.85f, "Analyzing audio", scenes = sceneCount, faces = faceCount))
         val pcm = AudioDecoder.decodeMono16k(proxyPath)
         val loudHi = Loudness.normalizedCurve(pcm, 16_000, windowMs = (1000.0 / SAMPLE_FPS).toInt())
         // Silero VAD if installed (music/noise-robust); else energy VAD. Falls back on any failure.
@@ -109,12 +122,13 @@ object AnalysisPipeline {
         } else FloatArray(0)
 
         // Whisper ASR (word-timed transcript) — only if a GGML model is installed.
+        val laughCount = laughterHi.count { it > 0.4f }
         val transcript: List<io.ch0p.edit.Word> = if (whisperModelPath != null && File(whisperModelPath).exists()) {
-            progress.onProgress(0.9f, "Transcribing")
+            progress.onProgress(AnalysisProgress(0.9f, "Transcribing", sceneCount, faceCount, laughCount))
             runCatching { Whisper(whisperModelPath).use { it.transcribe(pcm) } }.getOrDefault(emptyList())
         } else emptyList()
 
-        progress.onProgress(0.95f, "Assembling")
+        progress.onProgress(AnalysisProgress(0.95f, "Assembling", sceneCount, faceCount, laughCount))
         var aesthetic = fuseNormalized(sharp, color, n)
         // NIMA learned aesthetic blends with the classical metrics when installed.
         if (nimaScores.isNotEmpty()) {
@@ -142,7 +156,7 @@ object AnalysisPipeline {
             interest = TelemetryFusion.boost(interest, hilite, weight = 0.8f)
         }
 
-        progress.onProgress(1f, "Done")
+        progress.onProgress(AnalysisProgress(1f, "Done", sceneCount, faceCount, laughCount))
         return Analysis(
             durationMs = durationMs,
             frameRate = frameRate,
