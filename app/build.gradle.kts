@@ -50,6 +50,9 @@ dependencies {
     implementation(project(":analysis"))
     implementation(project(":render"))
     implementation(project(":models"))
+    implementation(libs.androidx.media3.exoplayer)  // preview playback
+    implementation(libs.androidx.media3.ui)
+    implementation(libs.androidx.media3.common)
 
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.core.splashscreen)

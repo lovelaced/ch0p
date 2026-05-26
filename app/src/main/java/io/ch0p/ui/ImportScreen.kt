@@ -9,6 +9,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -33,6 +34,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -333,11 +335,23 @@ fun ImportScreen(onOpenModels: () -> Unit = {}) {
                     Column(Modifier.padding(vertical = Space.sm)) {
                         Text("EXPORT COMPLETE", style = t.micro, color = c.success)
                         Text(state.output.name, style = t.timecode, color = c.textHi, modifier = Modifier.padding(top = Space.xs))
-                        Text(
-                            "Saved to app storage · ${formatBytes(state.output.length())}",
-                            style = t.body, color = c.textMid, modifier = Modifier.padding(top = Space.xs),
-                        )
                     }
+                }
+                item {
+                    PreviewPlayer(
+                        state.output,
+                        Modifier
+                            .fillMaxWidth(0.62f)
+                            .aspectRatio(9f / 16f)
+                            .clip(RoundedCornerShape(Radius.lg))
+                            .background(Color.Black),
+                    )
+                }
+                item {
+                    Text(
+                        "Saved to app storage · ${formatBytes(state.output.length())}",
+                        style = t.body, color = c.textMid,
+                    )
                 }
                 item { PrimaryButton("Edit another") { ui = ImportUi.Idle } }
             }
