@@ -83,6 +83,14 @@ fun ModelsScreen(onBack: () -> Unit) {
                     deviceSummary(cap),
                     style = t.body, color = c.textMid, modifier = Modifier.padding(top = Space.xs),
                 )
+                val active = ModelCatalog.featuresFor(installed)
+                Text(
+                    if (active.isEmpty()) "No premium models installed — download below"
+                    else "ACTIVE: " + active.joinToString(" · ") { it.displayName },
+                    style = t.label,
+                    color = if (active.isEmpty()) c.textLow else c.success,
+                    modifier = Modifier.padding(top = Space.xs),
+                )
             }
         }
 
