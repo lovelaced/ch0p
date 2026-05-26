@@ -40,6 +40,7 @@ object AnalysisPipeline {
         audioEventsModelPath: String? = null,
         whisperModelPath: String? = null,
         faceModelPath: String? = null,
+        sileroModelPath: String? = null,
         progress: Progress = Progress { _, _ -> },
     ): Analysis {
         val retriever = MediaMetadataRetriever()
@@ -81,7 +82,11 @@ object AnalysisPipeline {
         progress.onProgress(0.85f, "Analyzing audio")
         val pcm = AudioDecoder.decodeMono16k(proxyPath)
         val loudHi = Loudness.normalizedCurve(pcm, 16_000, windowMs = (1000.0 / SAMPLE_FPS).toInt())
-        val speechHi = Vad.speechCurve(pcm, 16_000)
+        // Silero VAD if installed (music/noise-robust); else energy VAD. Falls back on any failure.
+        val speechHi = if (sileroModelPath != null && File(sileroModelPath).exists()) {
+            runCatching { SileroVad(sileroModelPath).use { it.speechCurve(pcm) } }
+                .getOrNull()?.takeIf { it.isNotEmpty() } ?: Vad.speechCurve(pcm, 16_000)
+        } else Vad.speechCurve(pcm, 16_000)
 
         // YAMNet laughter/applause/music — only if the model is installed.
         val laughterHi: FloatArray = if (audioEventsModelPath != null && File(audioEventsModelPath).exists()) {
