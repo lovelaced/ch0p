@@ -41,6 +41,7 @@ dependencies {
     api(project(":edit-engine"))
     implementation(project(":ingest"))   // telemetry parsers + fusion
     implementation(libs.mediapipe.tasks.audio)   // YAMNet audio events
+    implementation(libs.mediapipe.tasks.vision)  // face detection
     implementation(libs.mediapipe.tasks.genai)   // on-device LLM (Gemma)
     implementation(libs.onnxruntime.android)     // Silero VAD
 

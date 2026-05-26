@@ -123,9 +123,11 @@ fun ImportScreen(onOpenModels: () -> Unit = {}) {
                         ModelCatalog.byId(id)?.takeIf { store.isInstalled(it) }?.let { store.fileFor(it).absolutePath }
                     val yamnet = pathIfInstalled("yamnet")
                     val whisper = pathIfInstalled("whisper-small-q5") ?: pathIfInstalled("whisper-base-q5")
+                    val face = pathIfInstalled("blazeface-short")
                     val analysis = AnalysisPipeline.analyze(
                         context, proxy.absolutePath, meta.durationMs, meta.frameRate,
-                        telemetry = telemetry, audioEventsModelPath = yamnet, whisperModelPath = whisper,
+                        telemetry = telemetry, audioEventsModelPath = yamnet,
+                        whisperModelPath = whisper, faceModelPath = face,
                     ) { f, s -> analyzeProgress = f; analyzeStage = s }
                     val edl = AutoEditor.edit(analysis, preset)
                     // Optional on-device LLM title (Gemma), if installed and we have a transcript.

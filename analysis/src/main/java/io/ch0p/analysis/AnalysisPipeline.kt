@@ -39,9 +39,13 @@ object AnalysisPipeline {
         telemetry: Telemetry? = null,
         audioEventsModelPath: String? = null,
         whisperModelPath: String? = null,
+        faceModelPath: String? = null,
         progress: Progress = Progress { _, _ -> },
     ): Analysis {
         val retriever = MediaMetadataRetriever()
+        val faceAnalyzer = faceModelPath?.takeIf { File(it).exists() }
+            ?.let { runCatching { FaceAnalyzer(context, it) }.getOrNull() }
+        val faceScores = ArrayList<Float>()
         val (motion, sharp, color, cuts) = try {
             retriever.setDataSource(proxyPath)
             val srcW = meta(retriever, MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH) ?: 16
@@ -57,6 +61,9 @@ object AnalysisPipeline {
                         tMs * 1000, MediaMetadataRetriever.OPTION_CLOSEST_SYNC, dstW, dstH,
                     )
                     if (bmp != null) {
+                        if (faceAnalyzer != null) {
+                            faceScores.add(runCatching { faceAnalyzer.detect(bmp).score }.getOrDefault(0f))
+                        }
                         na.pushFrame(bitmapToRgb(bmp), bmp.width, bmp.height, tMs / 1000.0)
                         bmp.recycle()
                     }
@@ -66,6 +73,7 @@ object AnalysisPipeline {
                 NativeResult(na.motionCurve(), na.sharpnessCurve(), na.colorfulnessCurve(), na.cutTimesSec())
             }
         } finally {
+            runCatching { faceAnalyzer?.close() }
             runCatching { retriever.release() }
         }
 
@@ -95,6 +103,12 @@ object AnalysisPipeline {
         val speech = resampleTo(speechHi, n)
         val drama = swell(loudness)
         var interest = combine(action, aesthetic) { a, b -> 0.5f * a + 0.5f * b }.let { normalize(it) }
+
+        // Faces are a strong interest cue — blend the per-frame face score in when available.
+        if (faceScores.isNotEmpty()) {
+            val face = clampLen(faceScores.toFloatArray(), n)
+            interest = normalize(FloatArray(n) { 0.5f * interest[it] + 0.5f * face[it] })
+        }
 
         // Camera telemetry (GPMF): physical motion boosts action; operator HiLight tags
         // boost interest — making the editor favour moments a human marked, even with no speech.
