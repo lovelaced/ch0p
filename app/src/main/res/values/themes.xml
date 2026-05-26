@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Base theme is a bare Material3 shell; all real theming is done in Compose (StudioTheme). -->
+    <style name="Theme.Ch0p" parent="android:Theme.Material.NoActionBar" />
+
+    <!-- Splash via androidx.core:core-splashscreen. Ink background + amber icon. -->
+    <style name="Theme.Ch0p.Splash" parent="Theme.SplashScreen">
+        <item name="windowSplashScreenBackground">@color/ink</item>
+        <item name="windowSplashScreenAnimatedIcon">@drawable/ic_launcher_foreground</item>
+        <item name="postSplashScreenTheme">@style/Theme.Ch0p</item>
+    </style>
+</resources>

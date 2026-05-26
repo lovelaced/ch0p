@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Adaptive-icon foreground. 108dp viewport; glyph kept inside the 66dp safe zone.
+     Mark: a "chop" — a play triangle split by a cut gap. Amber on transparent. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- left half of the play triangle -->
+    <path
+        android:fillColor="#FFB23E"
+        android:pathData="M40,34 L52,42 L52,66 L40,74 Z" />
+    <!-- right half, offset to suggest a cut -->
+    <path
+        android:fillColor="#FFB23E"
+        android:pathData="M58,46 L74,54 L58,62 Z" />
+</vector>

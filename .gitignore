@@ -1,0 +1,13 @@
+*.iml
+.gradle/
+.idea/
+build/
+.cxx/
+local.properties
+.DS_Store
+.kotlin/
+captures/
+*.apk
+*.keystore
+# Downloaded ML models / proxies are never committed
+/models/
