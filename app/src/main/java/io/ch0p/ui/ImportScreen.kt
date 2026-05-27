@@ -114,6 +114,9 @@ fun ImportScreen(initialVideo: Uri? = null, onOpenModels: () -> Unit = {}) {
     var analyzeFaces by remember { mutableIntStateOf(0) }
     var analyzeLaughs by remember { mutableIntStateOf(0) }
     var renderProgress by remember { mutableFloatStateOf(0f) }
+    // WebM export needs an on-device VP9 encoder (Pixels/Tensor have one).
+    val webmSupported = remember { CodecSupport.canEncode("video/x-vnd.on2.vp9") }
+    var outputFormat by remember { mutableStateOf(VideoRenderer.OutputFormat.MP4) }
 
     fun startProxy(uri: Uri, meta: VideoMetadata) {
         ui = ImportUi.Proxying(meta)
@@ -151,12 +154,13 @@ fun ImportScreen(initialVideo: Uri? = null, onOpenModels: () -> Unit = {}) {
         edl: EditDecisionList,
         cropTrajectory: List<CropKeyframe>,
         captionChunks: List<CaptionChunk>,
+        format: VideoRenderer.OutputFormat,
     ) {
         val src = sourceUri ?: run { ui = ImportUi.Failed("Lost the source file"); return }
         ui = ImportUi.Rendering(preset.displayName)
         renderProgress = 0f
         renderer.start(
-            src, edl, AspectRatio.parseOrDefault(preset.aspectRatio), cropTrajectory, captionChunks,
+            src, edl, AspectRatio.parseOrDefault(preset.aspectRatio), cropTrajectory, captionChunks, format,
             object : VideoRenderer.Callback {
                 override fun onComplete(output: File) { ui = ImportUi.Rendered(output) }
                 override fun onError(message: String, cause: Throwable?) { ui = ImportUi.Failed(message) }
@@ -326,7 +330,12 @@ fun ImportScreen(initialVideo: Uri? = null, onOpenModels: () -> Unit = {}) {
                     }
                 }
                 items(state.edl.units) { entry -> EdlRow(entry.order, entry.srcInMs, entry.srcOutMs) }
-                item { PrimaryButton("Render MP4") { runRender(state.preset, state.edl, state.cropTrajectory, state.captionChunks) } }
+                item { FormatPicker(outputFormat, webmSupported) { outputFormat = it; haptics.scrubTick() } }
+                item {
+                    PrimaryButton("Render ${outputFormat.name}") {
+                        runRender(state.preset, state.edl, state.cropTrajectory, state.captionChunks, outputFormat)
+                    }
+                }
                 item { Text("Start over", style = t.label, color = c.textMid,
                     modifier = Modifier.fillMaxWidth().clickable { ui = ImportUi.Idle }.padding(Space.md)) }
             }
@@ -419,6 +428,36 @@ private fun Choice(label: String, selected: Boolean, onClick: () -> Unit) {
 }
 
 @Composable
+private fun FormatPicker(
+    selected: VideoRenderer.OutputFormat,
+    webmSupported: Boolean,
+    onSelect: (VideoRenderer.OutputFormat) -> Unit,
+) {
+    val c = AppTheme.colors
+    val t = AppTheme.type
+    Column(Modifier.padding(vertical = Space.sm), verticalArrangement = Arrangement.spacedBy(Space.xs)) {
+        Text("FORMAT", style = t.micro, color = c.textMid)
+        Row(horizontalArrangement = Arrangement.spacedBy(Space.sm)) {
+            Choice("MP4", selected == VideoRenderer.OutputFormat.MP4) { onSelect(VideoRenderer.OutputFormat.MP4) }
+            if (webmSupported) {
+                Choice("WebM", selected == VideoRenderer.OutputFormat.WEBM) { onSelect(VideoRenderer.OutputFormat.WEBM) }
+            } else {
+                Text(
+                    "WebM", style = t.label, color = c.textLow,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(Radius.pill))
+                        .background(c.surface2)
+                        .padding(horizontal = Space.md, vertical = Space.sm),
+                )
+            }
+        }
+        if (!webmSupported) {
+            Text("WebM needs a VP9 encoder — not available on this device.", style = t.label, color = c.textLow)
+        }
+    }
+}
+
+@Composable
 private fun EdlRow(order: Int, srcInMs: Long, srcOutMs: Long) {
     val c = AppTheme.colors
     val t = AppTheme.type
@@ -439,7 +478,7 @@ private fun EdlRow(order: Int, srcInMs: Long, srcOutMs: Long) {
 private fun shareVideo(context: android.content.Context, file: File) {
     val uri = androidx.core.content.FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
     val intent = Intent(Intent.ACTION_SEND).apply {
-        type = "video/mp4"
+        type = if (file.extension.equals("webm", ignoreCase = true)) "video/webm" else "video/mp4"
         putExtra(Intent.EXTRA_STREAM, uri)
         addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
     }

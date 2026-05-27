@@ -93,6 +93,7 @@ object MediaProbe {
         "video/hevc" -> VideoCodec.HEVC
         "video/av01" -> VideoCodec.AV1
         "video/x-vnd.on2.vp9" -> VideoCodec.VP9
+        "video/x-vnd.on2.vp8" -> VideoCodec.VP8
         else -> VideoCodec.OTHER
     }
 

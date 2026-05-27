@@ -23,7 +23,7 @@ data class VideoMetadata(
     val isPortrait: Boolean get() = orientedHeight > orientedWidth
 }
 
-enum class VideoCodec { H264, HEVC, AV1, VP9, OTHER }
+enum class VideoCodec { H264, HEVC, AV1, VP9, VP8, OTHER }
 
 /**
  * How risky this input is to decode on-device. Cameras commonly emit 10-bit HEVC and

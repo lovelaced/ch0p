@@ -18,6 +18,11 @@ object CodecSupport {
         return runCatching { codecList.findDecoderForFormat(format) != null }.getOrDefault(false)
     }
 
+    /** Whether the device has a hardware/software encoder for [mime] (e.g. VP9 for WebM out). */
+    fun canEncode(mime: String): Boolean = runCatching {
+        codecList.codecInfos.any { it.isEncoder && it.supportedTypes.any { t -> t.equals(mime, ignoreCase = true) } }
+    }.getOrDefault(false)
+
     fun assessRisk(meta: VideoMetadata): IngestRisk {
         val reasons = mutableListOf<String>()
         var level = IngestRisk.Level.OK

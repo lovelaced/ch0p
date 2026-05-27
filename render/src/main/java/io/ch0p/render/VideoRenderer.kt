@@ -50,16 +50,20 @@ class VideoRenderer(private val context: Context) {
      * @param cropTrajectory optional smart-reframe path; when present each clip pans/zooms
      *   to follow the subject before the aspect-crop. Empty = static center-crop.
      */
+    /** Container/codec for the export. WebM (VP9+Opus) needs a device VP9 encoder. */
+    enum class OutputFormat(val ext: String) { MP4("mp4"), WEBM("webm") }
+
     fun start(
         sourceUri: Uri,
         edl: EditDecisionList,
         aspect: Float,
         cropTrajectory: List<CropKeyframe> = emptyList(),
         captionChunks: List<CaptionChunk> = emptyList(),
+        outputFormat: OutputFormat = OutputFormat.MP4,
         callback: Callback,
     ): File {
         require(edl.units.isNotEmpty()) { "empty EDL" }
-        val outFile = File(exportsDir(), "${UUID.randomUUID()}_${edl.presetId}.mp4")
+        val outFile = File(exportsDir(), "${UUID.randomUUID()}_${edl.presetId}.${outputFormat.ext}")
 
         val presentation = Presentation.createForAspectRatio(
             aspect, Presentation.LAYOUT_SCALE_TO_FIT_WITH_CROP,
@@ -91,8 +95,15 @@ class VideoRenderer(private val context: Context) {
         val sequence = EditedMediaItemSequence.Builder(items).build()
         val composition = Composition.Builder(sequence).build()
 
-        val t = Transformer.Builder(context)
-            .setVideoMimeType(MimeTypes.VIDEO_H264)
+        val builder = Transformer.Builder(context)
+        when (outputFormat) {
+            OutputFormat.MP4 -> builder.setVideoMimeType(MimeTypes.VIDEO_H264)
+            OutputFormat.WEBM -> builder
+                .setVideoMimeType(MimeTypes.VIDEO_VP9)
+                .setAudioMimeType(MimeTypes.AUDIO_OPUS)
+                .setMuxerFactory(WebmMuxer.Factory())
+        }
+        val t = builder
             .addListener(object : Transformer.Listener {
                 override fun onCompleted(composition: Composition, result: ExportResult) {
                     transformer = null
