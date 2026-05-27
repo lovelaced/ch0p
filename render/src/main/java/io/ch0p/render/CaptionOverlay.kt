@@ -3,6 +3,7 @@ package io.ch0p.render
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
+import android.graphics.PorterDuff
 import android.graphics.Typeface
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.effect.CanvasOverlay
@@ -35,6 +36,9 @@ class CaptionOverlay(
     private val accent = 0xFFFFB23E.toInt()  // Studio "active" amber
 
     override fun onDraw(canvas: Canvas, presentationTimeUs: Long) {
+        // The overlay reuses one backing bitmap across frames — wipe it first (before any early
+        // return) so a previous chunk never bleeds through under the current one.
+        canvas.drawColor(Color.TRANSPARENT, PorterDuff.Mode.CLEAR)
         val srcMs = clipStartMs + presentationTimeUs / 1000
         val chunk = chunks.firstOrNull { srcMs in it.startMs..it.endMs } ?: return
 

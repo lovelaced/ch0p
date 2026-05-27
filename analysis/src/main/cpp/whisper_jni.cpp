@@ -5,6 +5,7 @@
 
 #include <jni.h>
 
+#include <cctype>
 #include <cmath>
 #include <string>
 
@@ -12,11 +13,37 @@
 
 extern "C" {
 
+namespace {
+// Map a model filename to its DTW alignment-heads preset. DTW gives far more accurate word
+// timestamps than the legacy token method, but whisper_init FAILS if DTW is enabled without a
+// matching preset — so return NONE for anything we don't recognize and leave DTW off.
+whisper_alignment_heads_preset dtwPresetFor(const std::string& pathIn) {
+    std::string p = pathIn;
+    for (auto& ch : p) ch = static_cast<char>(tolower(ch));
+    auto has = [&](const char* s) { return p.find(s) != std::string::npos; };
+    const bool en = has(".en") || has("-en") || has("_en");
+    if (has("large-v3-turbo") || has("large-v3.turbo")) return WHISPER_AHEADS_LARGE_V3_TURBO;
+    if (has("large-v3")) return WHISPER_AHEADS_LARGE_V3;
+    if (has("large-v2")) return WHISPER_AHEADS_LARGE_V2;
+    if (has("large-v1") || has("large")) return WHISPER_AHEADS_LARGE_V1;
+    if (has("medium")) return en ? WHISPER_AHEADS_MEDIUM_EN : WHISPER_AHEADS_MEDIUM;
+    if (has("small")) return en ? WHISPER_AHEADS_SMALL_EN : WHISPER_AHEADS_SMALL;
+    if (has("base")) return en ? WHISPER_AHEADS_BASE_EN : WHISPER_AHEADS_BASE;
+    if (has("tiny")) return en ? WHISPER_AHEADS_TINY_EN : WHISPER_AHEADS_TINY;
+    return WHISPER_AHEADS_NONE;
+}
+}  // namespace
+
 JNIEXPORT jlong JNICALL
 Java_io_ch0p_analysis_Whisper_nativeInit(JNIEnv* env, jobject, jstring modelPath) {
     const char* path = env->GetStringUTFChars(modelPath, nullptr);
     whisper_context_params cparams = whisper_context_default_params();
     cparams.use_gpu = false;  // CPU is the reliable path on Android
+    const whisper_alignment_heads_preset preset = dtwPresetFor(path);
+    if (preset != WHISPER_AHEADS_NONE) {
+        cparams.dtw_token_timestamps = true;   // accurate word timing via cross-attention DTW
+        cparams.dtw_aheads_preset = preset;
+    }
     whisper_context* ctx = whisper_init_from_file_with_params(path, cparams);
     env->ReleaseStringUTFChars(modelPath, path);
     return reinterpret_cast<jlong>(ctx);
@@ -95,14 +122,16 @@ Java_io_ch0p_analysis_Whisper_nativeTranscribe(
             const char* txt = whisper_full_get_token_text(ctx, s, t);
             if (txt == nullptr) continue;
             whisper_token_data td = whisper_full_get_token_data(ctx, s, t);
-            const int64_t t0 = td.t0 * 10;  // centiseconds -> ms
+            // Prefer DTW timestamp (accurate, cross-attention aligned) for the word start; fall
+            // back to the legacy token start if DTW is unavailable. End uses the token's t1.
+            const int64_t tStart = (td.t_dtw >= 0 ? td.t_dtw : td.t0) * 10;  // centiseconds -> ms
             const int64_t t1 = td.t1 * 10;
 
             const bool startsWord = txt[0] == ' ';
             if (startsWord) flush();
             word += startsWord ? (txt + 1) : txt;
-            if (wStart < 0) wStart = t0;
-            wEnd = t1;
+            if (wStart < 0) wStart = tStart;
+            wEnd = t1 > wStart ? t1 : wStart;
         }
         flush();  // segment boundary ends a word
     }
