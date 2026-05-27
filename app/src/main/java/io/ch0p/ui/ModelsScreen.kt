@@ -168,7 +168,14 @@ private fun ModelRow(
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Column(Modifier.weight(1f)) {
-            Text(spec.displayName, style = t.titleM, color = if (canRun) c.textHi else c.textLow)
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Space.xs)) {
+                Text(spec.displayName, style = t.titleM, color = if (canRun) c.textHi else c.textLow)
+                if (spec.recommended) Text(
+                    "RECOMMENDED", style = t.micro, color = c.accentMagic,
+                    modifier = Modifier.clip(RoundedCornerShape(Radius.sm))
+                        .background(c.surface2).padding(horizontal = Space.xs, vertical = 2.dp),
+                )
+            }
             Text(
                 "${formatMb(spec.approxSizeBytes)} · ${spec.license}",
                 style = t.timecode, color = c.textLow,

@@ -71,7 +71,9 @@ import io.ch0p.ui.theme.AppTheme
 import io.ch0p.ui.theme.HairlineWidth
 import io.ch0p.ui.theme.Radius
 import io.ch0p.ui.theme.Space
+import androidx.compose.runtime.DisposableEffect
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -122,10 +124,15 @@ fun ImportScreen(initialVideo: Uri? = null, onOpenModels: () -> Unit = {}) {
     val webmSupported = remember { CodecSupport.canEncode("video/x-vnd.on2.vp9") }
 
     // Effective per-clip settings, derived from prefs.
+    val recommendedWhisperId = remember { ModelCatalog.recommendedFor(Feature.AUTO_CAPTIONS)?.id }
     val whisperModelId: String? = when (transcriptionPref) {
         "off" -> null
-        "auto" -> installedWhisper.lastOrNull()?.id
-        else -> transcriptionPref.takeIf { id -> installedWhisper.any { it.id == id } } ?: installedWhisper.lastOrNull()?.id
+        // Prefer the recommended model (Whisper small) when installed, else any installed one.
+        "auto" -> installedWhisper.firstOrNull { it.id == recommendedWhisperId }?.id
+            ?: installedWhisper.lastOrNull()?.id
+        else -> transcriptionPref.takeIf { id -> installedWhisper.any { it.id == id } }
+            ?: installedWhisper.firstOrNull { it.id == recommendedWhisperId }?.id
+            ?: installedWhisper.lastOrNull()?.id
     }
     val outputFormat = if (formatPref == "WEBM" && webmSupported) {
         VideoRenderer.OutputFormat.WEBM
@@ -143,6 +150,8 @@ fun ImportScreen(initialVideo: Uri? = null, onOpenModels: () -> Unit = {}) {
     var analyzeLaughs by remember { mutableIntStateOf(0) }
     var renderProgress by remember { mutableFloatStateOf(0f) }
     var previewFrame by remember { mutableStateOf<ImageBitmap?>(null) }
+    var editJob by remember { mutableStateOf<Job?>(null) }            // cancellable analysis pass
+    var renderingFrom by remember { mutableStateOf<ImportUi.Edited?>(null) }  // return here on cancel
     // Caption language choice for non-English transcripts (burn original vs. English translation).
     var captionEnglish by remember { mutableStateOf(false) }
     var englishChunks by remember { mutableStateOf<List<CaptionChunk>?>(null) }
@@ -187,15 +196,19 @@ fun ImportScreen(initialVideo: Uri? = null, onOpenModels: () -> Unit = {}) {
         format: VideoRenderer.OutputFormat,
     ) {
         val src = sourceUri ?: run { ui = ImportUi.Failed("Lost the source file"); return }
+        if (edl.units.isEmpty()) { ui = ImportUi.Failed("Nothing to render — the timeline is empty"); return }
         ui = ImportUi.Rendering(preset.displayName)
         renderProgress = 0f
-        renderer.start(
-            src, edl, AspectRatio.parseOrDefault(preset.aspectRatio), cropTrajectory, captionChunks, format,
-            object : VideoRenderer.Callback {
-                override fun onComplete(output: File) { ui = ImportUi.Rendered(output) }
-                override fun onError(message: String, cause: Throwable?) { ui = ImportUi.Failed(message) }
-            },
-        )
+        // start() can throw synchronously (e.g. WebM muxer init); don't let it crash the UI.
+        runCatching {
+            renderer.start(
+                src, edl, AspectRatio.parseOrDefault(preset.aspectRatio), cropTrajectory, captionChunks, format,
+                object : VideoRenderer.Callback {
+                    override fun onComplete(output: File) { ui = ImportUi.Rendered(output) }
+                    override fun onError(message: String, cause: Throwable?) { ui = ImportUi.Failed(message) }
+                },
+            )
+        }.onFailure { ui = ImportUi.Failed(it.message ?: "Couldn't start render") }
     }
 
     // On-demand English captions for a non-English transcript: re-run whisper in translate mode
@@ -222,7 +235,7 @@ fun ImportScreen(initialVideo: Uri? = null, onOpenModels: () -> Unit = {}) {
         analyzeProgress = 0f
         analyzeStage = "Starting"
         captionEnglish = false; englishChunks = null; translating = false  // fresh per edit
-        scope.launch {
+        editJob = scope.launch {
             ui = runCatching {
                 withContext(Dispatchers.IO) {
                     // Telemetry comes from the ORIGINAL (the proxy transcode drops the gpmd track).
@@ -250,10 +263,15 @@ fun ImportScreen(initialVideo: Uri? = null, onOpenModels: () -> Unit = {}) {
                         analyzeScenes = p.scenes; analyzeFaces = p.faces; analyzeLaughs = p.laughs
                     }
                     val edl = AutoEditor.edit(analysis, preset)
+                    if (edl.units.isEmpty()) {
+                        return@withContext ImportUi.Failed("Couldn't find a usable moment to cut in this clip")
+                    }
 
                     // Transcribe ONLY the selected clips, and only when speech is actually present —
-                    // bounds it to the short's length (seconds), not the whole source.
-                    val hasSpeech = analysis.speech.isNotEmpty() && analysis.speech.average() > 0.12
+                    // bounds it to the short's length (seconds), not the whole source. Use a presence
+                    // fraction (not the mean) so sparse-but-real speech still transcribes.
+                    val hasSpeech = analysis.speech.isNotEmpty() &&
+                        analysis.speech.count { it > 0.5f } > analysis.speech.size / 20
                     val spans = edl.units.map { it.srcInMs..it.srcOutMs }
                     val transcript = if (whisper != null && hasSpeech) {
                         analyzeStage = "Transcribing ${edl.units.size} clips"
@@ -296,6 +314,11 @@ fun ImportScreen(initialVideo: Uri? = null, onOpenModels: () -> Unit = {}) {
     // A video shared into the app: jump straight into processing.
     LaunchedEffect(initialVideo) {
         if (initialVideo != null && ui is ImportUi.Idle) beginImport(initialVideo)
+    }
+
+    // Never leak an in-flight transcode/encode (or analysis) when the screen leaves composition.
+    DisposableEffect(Unit) {
+        onDispose { editJob?.cancel(); proxyGen.cancel(); renderer.cancel() }
     }
 
     // The Analyzing state is a full-screen signature takeover, not a list item.
@@ -354,6 +377,12 @@ fun ImportScreen(initialVideo: Uri? = null, onOpenModels: () -> Unit = {}) {
                                 .padding(top = Space.sm),
                         )
                     }
+                }
+                item {
+                    Text("Cancel", style = t.label, color = c.textMid,
+                        modifier = Modifier.fillMaxWidth()
+                            .clickable { proxyGen.cancel(); haptics.scrubTick(); ui = ImportUi.Idle }
+                            .padding(Space.md))
                 }
                 // Poll Transformer progress while transcoding.
                 item {
@@ -454,7 +483,10 @@ fun ImportScreen(initialVideo: Uri? = null, onOpenModels: () -> Unit = {}) {
                 item { FormatPicker(outputFormat, webmSupported) { fmt -> scope.launch { settings.setFormat(fmt.name) }; haptics.scrubTick() } }
                 item {
                     PrimaryButton(if (translating) "Translating…" else "Render ${outputFormat.name}") {
-                        if (!translating) runRender(state.preset, state.edl, state.cropTrajectory, chosenChunks, outputFormat)
+                        if (!translating) {
+                            renderingFrom = state  // so Cancel returns to this edit
+                            runRender(state.preset, state.edl, state.cropTrajectory, chosenChunks, outputFormat)
+                        }
                     }
                 }
                 item { Text("Start over", style = t.label, color = c.textMid,
@@ -469,6 +501,10 @@ fun ImportScreen(initialVideo: Uri? = null, onOpenModels: () -> Unit = {}) {
                         color = c.accentActive, trackColor = c.surface2,
                         modifier = Modifier.fillMaxWidth().padding(top = Space.sm),
                     )
+                    Text("Cancel", style = t.label, color = c.textMid,
+                        modifier = Modifier.fillMaxWidth()
+                            .clickable { renderer.cancel(); haptics.scrubTick(); ui = renderingFrom ?: ImportUi.Idle }
+                            .padding(top = Space.md))
                     LaunchedEffect(Unit) {
                         while (ui is ImportUi.Rendering) {
                             renderProgress = renderer.queryProgress()

@@ -18,7 +18,19 @@ object AudioDecoder {
     private const val TARGET_RATE = 16_000
     private const val TIMEOUT_US = 10_000L
 
+    // One-entry cache: analysis decodes the proxy audio, then transcription (and any English
+    // translate pass) re-requests the same path — decoding a 10-min track 2-3× is wasteful.
+    @Volatile private var cachedPath: String? = null
+    @Volatile private var cachedPcm: ShortArray? = null
+
     fun decodeMono16k(path: String): ShortArray {
+        synchronized(this) { if (cachedPath == path) cachedPcm?.let { return it } }
+        val pcm = decodeUncached(path)
+        synchronized(this) { cachedPath = path; cachedPcm = pcm }
+        return pcm
+    }
+
+    private fun decodeUncached(path: String): ShortArray {
         val extractor = MediaExtractor()
         var codec: MediaCodec? = null
         try {

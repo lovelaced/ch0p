@@ -33,6 +33,7 @@ data class ModelSpec(
     val license: String,
     val minRamMb: Int,           // device RAM floor to run comfortably
     val prefersNpu: Boolean = false,
+    val recommended: Boolean = false,  // the default pick for its feature
     val sha256: String? = null,  // pin before shipping
 ) {
     val isSystemProvided: Boolean get() = runtime == ModelRuntime.SYSTEM
@@ -50,9 +51,9 @@ object ModelCatalog {
             57 * MB, "MIT", minRamMb = 3000,
         ),
         ModelSpec(
-            "whisper-small-q5", "Whisper small (best captions)", Feature.AUTO_CAPTIONS, ModelRuntime.GGML,
+            "whisper-small-q5", "Whisper small (recommended)", Feature.AUTO_CAPTIONS, ModelRuntime.GGML,
             "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small-q5_1.bin",
-            182 * MB, "MIT", minRamMb = 6000, prefersNpu = true,
+            182 * MB, "MIT", minRamMb = 6000, prefersNpu = true, recommended = true,
         ),
         ModelSpec(
             "silero-vad", "Silero VAD", Feature.ROBUST_VAD, ModelRuntime.ONNX,
@@ -119,6 +120,10 @@ object ModelCatalog {
     fun byId(id: String): ModelSpec? = all.firstOrNull { it.id == id }
 
     fun forFeature(feature: Feature): List<ModelSpec> = all.filter { it.feature == feature }
+
+    /** The default/preferred model for a feature (flagged [ModelSpec.recommended], else the first). */
+    fun recommendedFor(feature: Feature): ModelSpec? =
+        forFeature(feature).firstOrNull { it.recommended } ?: forFeature(feature).firstOrNull()
 
     /** Features unlocked by the given installed model ids. Pure — JVM-testable. */
     fun featuresFor(installedIds: Set<String>): List<Feature> =
