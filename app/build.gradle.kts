@@ -14,8 +14,8 @@ android {
         applicationId = "io.ch0p"
         minSdk = 31
         targetSdk = 36
-        versionCode = 14
-        versionName = "0.1.13"
+        versionCode = 15
+        versionName = "0.1.14"
         // Sideload builds: arm64 only keeps the APK ~3x smaller. Add ABIs back for Play.
         ndk { abiFilters += "arm64-v8a" }
     }

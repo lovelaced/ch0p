@@ -20,8 +20,11 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.activity.compose.BackHandler
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -167,6 +170,7 @@ fun ImportScreen(initialVideo: Uri? = null, onOpenModels: () -> Unit = {}) {
     var renderingFrom by remember { mutableStateOf<ImportUi.Edited?>(null) }  // return here on cancel
     var musicUri by remember { mutableStateOf<Uri?>(null) }           // optional user-picked music bed
     var normalizeLoudness by remember { mutableStateOf(true) }        // loudness-normalize the output
+    var confirmDelete by remember { mutableStateOf(false) }           // delete-export confirmation
     // Caption language choice for non-English transcripts (burn original vs. English translation).
     var captionEnglish by remember { mutableStateOf(false) }
     var englishChunks by remember { mutableStateOf<List<CaptionChunk>?>(null) }
@@ -353,6 +357,27 @@ fun ImportScreen(initialVideo: Uri? = null, onOpenModels: () -> Unit = {}) {
     // Never leak an in-flight transcode/encode (or analysis) when the screen leaves composition.
     DisposableEffect(Unit) {
         onDispose { editJob?.cancel(); proxyGen.cancel(); renderer.cancel() }
+    }
+
+    // System back on the export screen returns to the start (rather than exiting the app).
+    BackHandler(enabled = ui is ImportUi.Rendered) { ui = ImportUi.Idle }
+
+    // Delete-the-export confirmation (destructive, so confirm).
+    if (confirmDelete) {
+        val rendered = ui as? ImportUi.Rendered
+        AlertDialog(
+            onDismissRequest = { confirmDelete = false },
+            title = { Text("Delete this clip?", color = c.textHi) },
+            text = { Text("Removes it from the app. Any copy you saved to your gallery is kept.", color = c.textMid) },
+            confirmButton = {
+                TextButton(onClick = {
+                    runCatching { rendered?.output?.delete() }
+                    confirmDelete = false; haptics.confirm(); ui = ImportUi.Idle
+                }) { Text("Delete", color = c.danger) }
+            },
+            dismissButton = { TextButton(onClick = { confirmDelete = false }) { Text("Cancel", color = c.textMid) } },
+            containerColor = c.surface1,
+        )
     }
 
     // The Analyzing state is a full-screen signature takeover, not a list item.
@@ -624,10 +649,14 @@ fun ImportScreen(initialVideo: Uri? = null, onOpenModels: () -> Unit = {}) {
                     }
                 }
                 item {
-                    Text(
-                        "Edit another", style = t.label, color = c.textMid,
-                        modifier = Modifier.fillMaxWidth().clickable { ui = ImportUi.Idle }.padding(Space.md),
-                    )
+                    Row(Modifier.fillMaxWidth().padding(top = Space.sm), horizontalArrangement = Arrangement.spacedBy(Space.sm)) {
+                        OutlineButton("Done", c.accentActive, Modifier.weight(1f)) {
+                            haptics.scrubTick(); ui = ImportUi.Idle
+                        }
+                        OutlineButton("Delete", c.danger, Modifier.weight(1f)) {
+                            haptics.scrubTick(); confirmDelete = true
+                        }
+                    }
                 }
             }
         }
@@ -904,6 +933,22 @@ private fun PrimaryButton(label: String, onClick: () -> Unit) {
         contentAlignment = Alignment.Center,
     ) {
         Text(label, style = t.titleM, color = c.bg)
+    }
+}
+
+/** Bordered button (clear, tappable) — used for secondary/destructive actions in [accent]. */
+@Composable
+private fun OutlineButton(label: String, accent: Color, modifier: Modifier = Modifier, onClick: () -> Unit) {
+    val t = AppTheme.type
+    Box(
+        modifier = modifier
+            .clip(RoundedCornerShape(Radius.md))
+            .border(BorderStroke(HairlineWidth, accent), RoundedCornerShape(Radius.md))
+            .clickable(onClick = onClick)
+            .padding(vertical = Space.md),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(label, style = t.titleM, color = accent)
     }
 }
 
