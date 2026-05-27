@@ -11,6 +11,11 @@ set(WHISPER_BUILD_TESTS    OFF CACHE BOOL "" FORCE)
 set(WHISPER_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
 set(WHISPER_BUILD_SERVER   OFF CACHE BOOL "" FORCE)
 set(GGML_OPENMP            OFF CACHE BOOL "" FORCE)  # avoid OpenMP runtime issues on Android
+# Cross-compiling sets GGML_NATIVE OFF, which otherwise leaves -march empty → no dotprod/fp16
+# SIMD (2-4x slower on Tensor). Pin the ARM arch so ggml emits the fast quantized matmul kernels.
+# armv8.2-a+dotprod+fp16 is safe across all Tensor/Pixel cores (A76+); i8mm omitted for portability.
+set(GGML_NATIVE            OFF CACHE BOOL "" FORCE)
+set(GGML_CPU_ARM_ARCH      "armv8.2-a+dotprod+fp16" CACHE STRING "" FORCE)
 FetchContent_Declare(
     whisper
     GIT_REPOSITORY https://github.com/ggml-org/whisper.cpp.git

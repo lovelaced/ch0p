@@ -13,7 +13,12 @@ android {
         minSdk = 31
         ndk { abiFilters += "arm64-v8a" }   // sideload: arm64 only
         externalNativeBuild {
-            cmake { cppFlags += "-std=c++17" }
+            cmake {
+                cppFlags += "-std=c++17"
+                // Force optimized native compilation even for the app's debug variant — AGP
+                // otherwise builds ggml at -O0 for debug, which cripples whisper throughput.
+                arguments += "-DCMAKE_BUILD_TYPE=Release"
+            }
         }
     }
 

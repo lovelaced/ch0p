@@ -1,14 +1,18 @@
 package io.ch0p.analysis
 
 import io.ch0p.edit.Word
+import java.io.File
 
 /**
- * Segment-scoped transcription. Instead of running Whisper over the whole (possibly very
- * long) source — which is the "transcribing forever" trap — this decodes the proxy audio
- * once and transcribes only the chosen clip spans, reporting per-clip progress. Cost scales
- * with the short's length (seconds), not the source.
+ * Segment-scoped transcription, done right. Whisper's encoder always runs on fixed 30s
+ * windows, so calling it once *per clip* pays a full 30s encoder pass for every tiny clip —
+ * crippling for a montage of short cuts. Instead we **concatenate** the selected clips' audio
+ * into one buffer (with short silence separators so words don't merge across joins) and run a
+ * single pass (Whisper chunks it internally, with no_context so clips don't bleed), then map
+ * word timestamps from concat-time back to source time. Cost ≈ total clip seconds, not
+ * clips × 30s.
  *
- * Word timestamps are offset back to source time so captions/cuts line up. Device-only.
+ * Device-only. Reports whisper's real 0..1 progress.
  */
 object Transcriber {
 
@@ -16,10 +20,12 @@ object Transcriber {
         fun onProgress(fraction: Float)
     }
 
-    /**
-     * @param spansMs source-time ranges (the selected clips) to transcribe.
-     * @return words across all spans, in source time.
-     */
+    private const val SR = 16_000
+    private const val MIN_SAMPLES = 1_600       // skip <0.1s fragments
+    private const val GAP_SAMPLES = SR * 3 / 10 // 0.3s silence between clips → clean word boundaries
+
+    private class Span(val concatStartMs: Long, val concatEndMs: Long, val srcStartMs: Long)
+
     fun transcribeSpans(
         proxyPath: String,
         modelPath: String,
@@ -31,25 +37,58 @@ object Transcriber {
         val pcm = AudioDecoder.decodeMono16k(proxyPath)
         if (pcm.isEmpty()) return emptyList()
 
-        val threads = Runtime.getRuntime().availableProcessors().coerceIn(2, 8)
-        val words = ArrayList<Word>()
-        Whisper(modelPath).use { whisper ->
-            if (!whisper.isReady) return emptyList()
-            spansMs.forEachIndexed { i, span ->
-                val from = (span.first * SR / 1000).toInt().coerceIn(0, pcm.size)
-                val to = (span.last * SR / 1000).toInt().coerceIn(from, pcm.size)
-                if (to - from > MIN_SAMPLES) {
-                    val slice = pcm.copyOfRange(from, to)
-                    runCatching { whisper.transcribe(slice, language, threads) }
-                        .getOrDefault(emptyList())
-                        .forEach { w -> words.add(Word(w.text, w.startMs + span.first, w.endMs + span.first)) }
-                }
-                progress.onProgress((i + 1).toFloat() / spansMs.size)
-            }
+        // Concatenate the selected spans into one buffer, tracking concat→source time, with a
+        // short silence gap after each clip so Whisper doesn't fuse the last/first words of joins.
+        val parts = ArrayList<ShortArray>()
+        val map = ArrayList<Span>()
+        var concatSamples = 0
+        for (span in spansMs) {
+            val from = (span.first * SR / 1000).toInt().coerceIn(0, pcm.size)
+            val to = (span.last * SR / 1000).toInt().coerceIn(from, pcm.size)
+            if (to - from < MIN_SAMPLES) continue
+            val slice = pcm.copyOfRange(from, to)
+            val startMs = concatSamples * 1000L / SR
+            parts.add(slice)
+            concatSamples += slice.size
+            map.add(Span(startMs, concatSamples * 1000L / SR, span.first))
+            parts.add(ShortArray(GAP_SAMPLES))   // silence separator
+            concatSamples += GAP_SAMPLES
         }
-        return words
+        if (map.isEmpty()) return emptyList()
+
+        val concat = ShortArray(concatSamples)
+        var off = 0
+        for (p in parts) { System.arraycopy(p, 0, concat, off, p.size); off += p.size }
+
+        val raw = Whisper(modelPath).use { w ->
+            if (!w.isReady) return emptyList()
+            w.transcribe(concat, language, performanceCoreCount()) { pct -> progress.onProgress(pct / 100f) }
+        }
+
+        // Map each word from concat-time back to source-time via its span (words landing in a
+        // silence gap are dropped — they're hallucinations, not real speech).
+        return raw.mapNotNull { word ->
+            val span = map.firstOrNull { word.startMs in it.concatStartMs..it.concatEndMs }
+                ?: return@mapNotNull null
+            val delta = word.startMs - span.concatStartMs
+            Word(word.text, span.srcStartMs + delta, span.srcStartMs + (word.endMs - span.concatStartMs))
+        }
     }
 
-    private const val SR = 16_000
-    private const val MIN_SAMPLES = 1_600  // <0.1s of audio isn't worth a Whisper pass
+    /**
+     * Whisper on big.LITTLE is gated by the slowest thread, so using all cores (incl. the little
+     * cluster) is *slower*. Count the non-littlest cores from cpufreq; fall back to half.
+     */
+    private fun performanceCoreCount(): Int {
+        val cores = Runtime.getRuntime().availableProcessors()
+        val n = runCatching {
+            val freqs = (0 until cores).mapNotNull { i ->
+                File("/sys/devices/system/cpu/cpu$i/cpufreq/cpuinfo_max_freq")
+                    .takeIf { it.exists() }?.readText()?.trim()?.toIntOrNull()
+            }
+            val min = freqs.minOrNull() ?: return@runCatching null
+            freqs.count { it > min }.takeIf { it >= 2 }
+        }.getOrNull() ?: (cores / 2)
+        return n.coerceIn(2, 6)
+    }
 }

@@ -5,6 +5,7 @@
 
 #include <jni.h>
 
+#include <cmath>
 #include <string>
 
 #include "whisper.h"
@@ -21,9 +22,18 @@ Java_io_ch0p_analysis_Whisper_nativeInit(JNIEnv* env, jobject, jstring modelPath
     return reinterpret_cast<jlong>(ctx);
 }
 
+namespace {
+// Forwards whisper's 0..100 progress to Whisper.progressCallback(int) on the calling thread.
+struct ProgressCtx { JNIEnv* env; jobject obj; jmethodID mid; };
+void progressCb(struct whisper_context*, struct whisper_state*, int progress, void* userData) {
+    auto* pc = static_cast<ProgressCtx*>(userData);
+    if (pc != nullptr && pc->mid != nullptr) pc->env->CallVoidMethod(pc->obj, pc->mid, static_cast<jint>(progress));
+}
+}  // namespace
+
 JNIEXPORT jstring JNICALL
 Java_io_ch0p_analysis_Whisper_nativeTranscribe(
-        JNIEnv* env, jobject, jlong handle, jfloatArray pcm, jstring lang, jint threads) {
+        JNIEnv* env, jobject thiz, jlong handle, jfloatArray pcm, jstring lang, jint threads) {
     auto* ctx = reinterpret_cast<whisper_context*>(handle);
     if (ctx == nullptr) return env->NewStringUTF("");
 
@@ -36,8 +46,25 @@ Java_io_ch0p_analysis_Whisper_nativeTranscribe(
     wparams.print_timestamps = false;
     wparams.token_timestamps = true;          // per-token times -> word timing
     wparams.n_threads = threads > 0 ? threads : 4;
+    wparams.no_context = true;                 // independent clips: don't bleed context across joins
+    wparams.temperature = 0.0f;
+    wparams.temperature_inc = 0.0f;            // disable temperature-fallback re-decodes (up to ~5x)
+    // Shrink the encoder context to the actual audio length (~2x faster encoder on short clips),
+    // capped at the full 30s window. audio_ctx default (1500) wastes work padding short audio.
+    {
+        const double seconds = static_cast<double>(n) / 16000.0;
+        int ac = static_cast<int>(std::ceil(((seconds / 30.0) * 1500.0 + 128.0) / 64.0) * 64.0);
+        if (ac < 768) ac = 768;
+        if (ac > 1500) ac = 1500;
+        wparams.audio_ctx = ac;
+    }
     const char* l = env->GetStringUTFChars(lang, nullptr);
     wparams.language = l;                      // "auto" or e.g. "en"
+
+    jclass cls = env->GetObjectClass(thiz);
+    ProgressCtx pc { env, thiz, env->GetMethodID(cls, "progressCallback", "(I)V") };
+    wparams.progress_callback = progressCb;
+    wparams.progress_callback_user_data = &pc;
 
     const int rc = whisper_full(ctx, wparams, samples, n);
 
