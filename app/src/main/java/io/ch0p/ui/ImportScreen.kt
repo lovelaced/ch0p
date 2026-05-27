@@ -55,7 +55,9 @@ import io.ch0p.ingest.ProxyGenerator
 import io.ch0p.ingest.ProxySpec
 import io.ch0p.ingest.VideoMetadata
 import io.ch0p.ingest.telemetry.TelemetryExtractor
+import io.ch0p.models.Feature
 import io.ch0p.models.ModelCatalog
+import io.ch0p.models.ModelSpec
 import io.ch0p.models.ModelStore
 import io.ch0p.render.AspectRatio
 import io.ch0p.render.VideoRenderer
@@ -98,9 +100,13 @@ fun ImportScreen(initialVideo: Uri? = null, onOpenModels: () -> Unit = {}) {
     val scope = rememberCoroutineScope()
     val proxyGen = remember { ProxyGenerator(context) }
     val renderer = remember { VideoRenderer(context) }
+    val store = remember { ModelStore(context) }
+    val installedWhisper = remember { ModelCatalog.forFeature(Feature.AUTO_CAPTIONS).filter { store.isInstalled(it) } }
 
     var ui by remember { mutableStateOf<ImportUi>(ImportUi.Idle) }
     var sourceUri by remember { mutableStateOf<Uri?>(null) }
+    // Transcription model for this clip: null = off (e.g. no speech). Defaults to best installed.
+    var whisperModelId by remember { mutableStateOf(installedWhisper.lastOrNull()?.id) }
     var proxyProgress by remember { mutableFloatStateOf(0f) }
     var analyzeProgress by remember { mutableFloatStateOf(0f) }
     var analyzeStage by remember { mutableStateOf("") }
@@ -170,11 +176,10 @@ fun ImportScreen(initialVideo: Uri? = null, onOpenModels: () -> Unit = {}) {
                         runCatching { TelemetryExtractor.extract(context, it) }.getOrNull()
                     }
                     // Optional models: pass a path only if installed (else the channel stays silent).
-                    val store = ModelStore(context)
                     fun pathIfInstalled(id: String) =
                         ModelCatalog.byId(id)?.takeIf { store.isInstalled(it) }?.let { store.fileFor(it).absolutePath }
                     val yamnet = pathIfInstalled("yamnet")
-                    val whisper = pathIfInstalled("whisper-small-q5") ?: pathIfInstalled("whisper-base-q5")
+                    val whisper = whisperModelId?.let { pathIfInstalled(it) }  // null = transcription off
                     val face = pathIfInstalled("blazeface-short")
                     val silero = pathIfInstalled("silero-vad")
                     val nima = pathIfInstalled("nima-mobilenet")
@@ -291,6 +296,11 @@ fun ImportScreen(initialVideo: Uri? = null, onOpenModels: () -> Unit = {}) {
                         )
                     }
                 }
+                if (installedWhisper.isNotEmpty()) {
+                    item {
+                        TranscriptionPicker(installedWhisper, whisperModelId) { whisperModelId = it; haptics.scrubTick() }
+                    }
+                }
                 item { PresetPager(onSelect = { preset -> haptics.confirm(); runEdit(state.meta, state.proxy, preset) }) }
             }
 
@@ -372,6 +382,40 @@ fun ImportScreen(initialVideo: Uri? = null, onOpenModels: () -> Unit = {}) {
             }
         }
     }
+}
+
+@Composable
+private fun TranscriptionPicker(installed: List<ModelSpec>, selectedId: String?, onSelect: (String?) -> Unit) {
+    val c = AppTheme.colors
+    val t = AppTheme.type
+    Column(Modifier.padding(vertical = Space.sm), verticalArrangement = Arrangement.spacedBy(Space.xs)) {
+        Text("TRANSCRIPTION", style = t.micro, color = c.textMid)
+        Row(horizontalArrangement = Arrangement.spacedBy(Space.sm)) {
+            Choice("Off", selectedId == null) { onSelect(null) }
+            installed.forEach { spec ->
+                Choice(spec.displayName.substringBefore(" ("), selectedId == spec.id) { onSelect(spec.id) }
+            }
+        }
+        Text(
+            if (selectedId == null) "No captions / speech-aware cuts for this clip."
+            else "Captions + speech-aware cuts on.",
+            style = t.label, color = c.textLow,
+        )
+    }
+}
+
+@Composable
+private fun Choice(label: String, selected: Boolean, onClick: () -> Unit) {
+    val c = AppTheme.colors
+    val t = AppTheme.type
+    Text(
+        label, style = t.label, color = if (selected) c.bg else c.textHi,
+        modifier = Modifier
+            .clip(RoundedCornerShape(Radius.pill))
+            .background(if (selected) c.accentActive else c.surface2)
+            .clickable(onClick = onClick)
+            .padding(horizontal = Space.md, vertical = Space.sm),
+    )
 }
 
 @Composable
