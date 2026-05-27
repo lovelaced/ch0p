@@ -209,12 +209,16 @@ fun ImportScreen(initialVideo: Uri? = null, onOpenModels: () -> Unit = {}) {
                     val face = pathIfInstalled("blazeface-short")
                     val silero = pathIfInstalled("silero-vad")
                     val nima = pathIfInstalled("nima-mobilenet")
+                    // One honest progress journey: analysis fills the first band, then
+                    // transcription, then titling — never 100% until truly done.
+                    val analysisBand = if (whisper != null) 0.5f else 1f
                     val analysis = AnalysisPipeline.analyze(
                         context, proxy.absolutePath, meta.durationMs, meta.frameRate,
                         telemetry = telemetry, audioEventsModelPath = yamnet,
                         faceModelPath = face, sileroModelPath = silero, nimaModelPath = nima,
                     ) { p ->
-                        analyzeProgress = p.fraction; analyzeStage = p.stage
+                        analyzeProgress = p.fraction * analysisBand
+                        analyzeStage = if (p.stage == "Done") "Analyzing" else p.stage
                         analyzeScenes = p.scenes; analyzeFaces = p.faces; analyzeLaughs = p.laughs
                     }
                     val edl = AutoEditor.edit(analysis, preset)
@@ -223,20 +227,27 @@ fun ImportScreen(initialVideo: Uri? = null, onOpenModels: () -> Unit = {}) {
                     // bounds it to the short's length (seconds), not the whole source.
                     val hasSpeech = analysis.speech.isNotEmpty() && analysis.speech.average() > 0.12
                     val words = if (whisper != null && hasSpeech) {
+                        analyzeStage = "Transcribing ${edl.units.size} clips"
+                        analyzeProgress = analysisBand
                         val spans = edl.units.map { it.srcInMs..it.srcOutMs }
                         Transcriber.transcribeSpans(proxy.absolutePath, whisper, spans) { f ->
-                            analyzeProgress = f; analyzeStage = "Transcribing ${edl.units.size} clips"
+                            analyzeProgress = analysisBand + f * (0.95f - analysisBand)
                         }
-                    } else emptyList()
+                    } else {
+                        analyzeProgress = 0.95f  // nothing to transcribe — fill the bar
+                        emptyList()
+                    }
 
                     val title = if (words.isNotEmpty()) {
                         pathIfInstalled("gemma3-1b")?.let { p ->
                             analyzeStage = "Writing title"
+                            analyzeProgress = 0.97f
                             runCatching { LlmEngine(context, p).use { SemanticEditor(it).analyze(words).title } }
                                 .getOrNull()?.takeIf { it.isNotBlank() }
                         }
                     } else null
                     val captions = if (preset.captions) CaptionChunker.chunk(words) else emptyList()
+                    analyzeStage = "Done"; analyzeProgress = 1f
                     ImportUi.Edited(preset, edl, title, analysis.cropTrajectory, captions)
                 }
             }.getOrElse { ImportUi.Failed(it.message ?: "Analysis failed") }
