@@ -193,7 +193,7 @@ private fun ModelRow(
                 installed -> Text("INSTALLED · DELETE", style = t.micro, color = c.success,
                     modifier = Modifier.clickable(onClick = onDelete))
                 !canRun -> Text("NEEDS ${spec.minRamMb / 1000}GB", style = t.micro, color = c.textLow)
-                spec.url == null -> Text("IMPORT", style = t.micro, color = c.accentActive,
+                spec.url == null -> Text("IMPORT", style = t.micro, color = c.accentMagic,
                     modifier = Modifier.clickable(onClick = onImport))
                 else -> Text("DOWNLOAD", style = t.micro, color = c.accentActive,
                     modifier = Modifier.clickable(onClick = onDownload))

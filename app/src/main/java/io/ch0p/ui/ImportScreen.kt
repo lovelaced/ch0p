@@ -97,6 +97,7 @@ private sealed interface ImportUi {
         val proxyPath: String? = null,           // for an on-demand English translate pass
         val whisperModelPath: String? = null,
         val captionSpans: List<LongRange> = emptyList(),
+        val duckEnvelope: FloatArray = FloatArray(0),  // music gain over output time (for ducking)
     ) : ImportUi
     data class Rendering(val presetName: String) : ImportUi
     data class Rendered(val output: File) : ImportUi
@@ -152,6 +153,7 @@ fun ImportScreen(initialVideo: Uri? = null, onOpenModels: () -> Unit = {}) {
     var previewFrame by remember { mutableStateOf<ImageBitmap?>(null) }
     var editJob by remember { mutableStateOf<Job?>(null) }            // cancellable analysis pass
     var renderingFrom by remember { mutableStateOf<ImportUi.Edited?>(null) }  // return here on cancel
+    var musicUri by remember { mutableStateOf<Uri?>(null) }           // optional user-picked music bed
     // Caption language choice for non-English transcripts (burn original vs. English translation).
     var captionEnglish by remember { mutableStateOf(false) }
     var englishChunks by remember { mutableStateOf<List<CaptionChunk>?>(null) }
@@ -194,6 +196,8 @@ fun ImportScreen(initialVideo: Uri? = null, onOpenModels: () -> Unit = {}) {
         cropTrajectory: List<CropKeyframe>,
         captionChunks: List<CaptionChunk>,
         format: VideoRenderer.OutputFormat,
+        music: Uri?,
+        duck: FloatArray,
     ) {
         val src = sourceUri ?: run { ui = ImportUi.Failed("Lost the source file"); return }
         if (edl.units.isEmpty()) { ui = ImportUi.Failed("Nothing to render — the timeline is empty"); return }
@@ -203,7 +207,8 @@ fun ImportScreen(initialVideo: Uri? = null, onOpenModels: () -> Unit = {}) {
         runCatching {
             renderer.start(
                 src, edl, AspectRatio.parseOrDefault(preset.aspectRatio), cropTrajectory, captionChunks, format,
-                object : VideoRenderer.Callback {
+                musicUri = music, duckEnvelope = duck,
+                callback = object : VideoRenderer.Callback {
                     override fun onComplete(output: File) { ui = ImportUi.Rendered(output) }
                     override fun onError(message: String, cause: Throwable?) { ui = ImportUi.Failed(message) }
                 },
@@ -234,7 +239,7 @@ fun ImportScreen(initialVideo: Uri? = null, onOpenModels: () -> Unit = {}) {
         ui = ImportUi.Analyzing(preset.displayName)
         analyzeProgress = 0f
         analyzeStage = "Starting"
-        captionEnglish = false; englishChunks = null; translating = false  // fresh per edit
+        captionEnglish = false; englishChunks = null; translating = false; musicUri = null  // fresh per edit
         editJob = scope.launch {
             ui = runCatching {
                 withContext(Dispatchers.IO) {
@@ -294,6 +299,9 @@ fun ImportScreen(initialVideo: Uri? = null, onOpenModels: () -> Unit = {}) {
                         }
                     } else null
                     val captions = if (preset.captions) CaptionChunker.chunk(words) else emptyList()
+                    // Music ducking envelope over OUTPUT time: quieter where the underlying
+                    // clip has speech, louder in the gaps (used only if the user adds music).
+                    val duck = duckEnvelope(edl, analysis.speech, meta.durationMs)
                     analyzeStage = "Done"; analyzeProgress = 1f
                     ImportUi.Edited(
                         preset, edl, title, analysis.cropTrajectory, captions,
@@ -301,6 +309,7 @@ fun ImportScreen(initialVideo: Uri? = null, onOpenModels: () -> Unit = {}) {
                         proxyPath = proxy.absolutePath,
                         whisperModelPath = whisper,
                         captionSpans = spans,
+                        duckEnvelope = duck,
                     )
                 }
             }.getOrElse { ImportUi.Failed(it.message ?: "Analysis failed") }
@@ -309,6 +318,12 @@ fun ImportScreen(initialVideo: Uri? = null, onOpenModels: () -> Unit = {}) {
 
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         uri?.let { beginImport(it) }
+    }
+    val musicPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        uri?.let {
+            runCatching { context.contentResolver.takePersistableUriPermission(it, Intent.FLAG_GRANT_READ_URI_PERMISSION) }
+            musicUri = it
+        }
     }
 
     // A video shared into the app: jump straight into processing.
@@ -480,12 +495,20 @@ fun ImportScreen(initialVideo: Uri? = null, onOpenModels: () -> Unit = {}) {
                         },
                     )
                 }
+                item {
+                    MusicRow(
+                        hasMusic = musicUri != null,
+                        onPick = { musicPicker.launch(arrayOf("audio/*")); haptics.scrubTick() },
+                        onClear = { musicUri = null; haptics.scrubTick() },
+                    )
+                }
                 item { FormatPicker(outputFormat, webmSupported) { fmt -> scope.launch { settings.setFormat(fmt.name) }; haptics.scrubTick() } }
                 item {
                     PrimaryButton(if (translating) "Translating…" else "Render ${outputFormat.name}") {
                         if (!translating) {
                             renderingFrom = state  // so Cancel returns to this edit
-                            runRender(state.preset, state.edl, state.cropTrajectory, chosenChunks, outputFormat)
+                            runRender(state.preset, state.edl, state.cropTrajectory, chosenChunks, outputFormat,
+                                music = musicUri, duck = state.duckEnvelope)
                         }
                     }
                 }
@@ -611,6 +634,21 @@ private fun FormatPicker(
         if (!webmSupported) {
             Text("WebM needs a VP9 encoder — not available on this device.", style = t.label, color = c.textLow)
         }
+    }
+}
+
+@Composable
+private fun MusicRow(hasMusic: Boolean, onPick: () -> Unit, onClear: () -> Unit) {
+    val c = AppTheme.colors
+    val t = AppTheme.type
+    Column(Modifier.padding(vertical = Space.sm), verticalArrangement = Arrangement.spacedBy(Space.xs)) {
+        Text("MUSIC", style = t.micro, color = c.textMid)
+        Row(horizontalArrangement = Arrangement.spacedBy(Space.sm), verticalAlignment = Alignment.CenterVertically) {
+            Choice(if (hasMusic) "Track added ✓" else "Add music", hasMusic, onPick)
+            if (hasMusic) Text("Remove", style = t.label, color = c.textMid,
+                modifier = Modifier.clickable(onClick = onClear).padding(Space.xs))
+        }
+        if (hasMusic) Text("Ducks under speech, normalized in the mix.", style = t.label, color = c.textLow)
     }
 }
 
@@ -765,6 +803,33 @@ private fun formatDuration(ms: Long): String {
     val m = totalSec / 60
     val s = totalSec % 60
     return "%d:%02d".format(m, s)
+}
+
+private const val DUCK_ENV_HZ = 20f
+
+/**
+ * Music gain over OUTPUT time at [DUCK_ENV_HZ]: ~0.22 where the underlying clip has speech
+ * (ducked under the voice), ~0.6 in the gaps, one-pole smoothed to avoid clicks. Walks the
+ * EDL in playback order and samples the source-time [speech] curve.
+ */
+private fun duckEnvelope(edl: EditDecisionList, speech: FloatArray, srcDurationMs: Long): FloatArray {
+    if (edl.units.isEmpty()) return FloatArray(0)
+    fun speechAt(srcMs: Long): Float =
+        if (speech.isEmpty() || srcDurationMs <= 0) 0f
+        else speech[((srcMs.toDouble() / srcDurationMs) * speech.size).toInt().coerceIn(0, speech.size - 1)]
+
+    val stepMs = (1000f / DUCK_ENV_HZ).toLong()
+    val raw = ArrayList<Float>()
+    for (u in edl.units.sortedBy { it.order }) {
+        var t = 0L
+        val durMs = (u.srcOutMs - u.srcInMs).coerceAtLeast(0)
+        while (t < durMs) {
+            raw.add(if (speechAt(u.srcInMs + t) > 0.4f) 0.22f else 0.6f)
+            t += stepMs
+        }
+    }
+    var g = 0.6f
+    return FloatArray(raw.size) { i -> g += (raw[i] - g) * 0.2f; g }
 }
 
 private fun formatBytes(bytes: Long): String = when {

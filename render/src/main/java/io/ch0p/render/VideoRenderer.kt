@@ -5,6 +5,7 @@ import android.net.Uri
 import androidx.media3.common.Effect
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MimeTypes
+import androidx.media3.common.audio.AudioProcessor
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.effect.OverlayEffect
 import androidx.media3.effect.Presentation
@@ -60,6 +61,9 @@ class VideoRenderer(private val context: Context) {
         cropTrajectory: List<CropKeyframe> = emptyList(),
         captionChunks: List<CaptionChunk> = emptyList(),
         outputFormat: OutputFormat = OutputFormat.MP4,
+        musicUri: Uri? = null,
+        duckEnvelope: FloatArray = FloatArray(0),
+        duckEnvHz: Float = 20f,
         callback: Callback,
     ): File {
         require(edl.units.isNotEmpty()) { "empty EDL" }
@@ -92,8 +96,20 @@ class VideoRenderer(private val context: Context) {
         }
 
         @Suppress("DEPRECATION")
-        val sequence = EditedMediaItemSequence.Builder(items).build()
-        val composition = Composition.Builder(sequence).build()
+        val videoSequence = EditedMediaItemSequence.Builder(items).build()
+
+        // Optional user-picked music: a second, looping audio sequence ducked under speech.
+        val composition = if (musicUri != null) {
+            val music = EditedMediaItem.Builder(MediaItem.fromUri(musicUri))
+                .setRemoveVideo(true)
+                .setEffects(Effects(listOf<AudioProcessor>(DuckingAudioProcessor(duckEnvelope, duckEnvHz)), emptyList()))
+                .build()
+            @Suppress("DEPRECATION")
+            val musicSequence = EditedMediaItemSequence.Builder(music).setIsLooping(true).build()
+            Composition.Builder(videoSequence, musicSequence).build()
+        } else {
+            Composition.Builder(videoSequence).build()
+        }
 
         val builder = Transformer.Builder(context)
         when (outputFormat) {
