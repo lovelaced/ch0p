@@ -26,9 +26,10 @@ Every cloud clipping tool uploads your footage and only works on talking-head vi
 - **A real editing brain** — fuses scene length, motion, speech, laughter, drama, aesthetics, and interest into one score, then selects a diverse, well-paced set of moments under a target length (not just the loudest clips).
 - **Works without speech** — reads embedded camera telemetry (GoPro/action-cam accelerometer, g-force, and the HiLight tags you press while filming) to find highlights on footage no transcript-based tool can touch.
 - **Style presets** — Short-form/TikTok, Cinematic, Promo, Vlog, Action, Talking-head. Each is a tuned recipe for pacing, weighting, aspect ratio, captions, and ordering.
-- **Smart reframe & karaoke captions** — follows the subject when cropping landscape to vertical, and burns in word-timed captions from on-device transcription.
+- **Smart reframe & karaoke captions** — follows the subject when cropping landscape to vertical, and burns in word-timed captions from on-device transcription. Non-English speech is detected, and you can translate it to English captions before rendering.
+- **Music & balanced sound** — add your own music track and it's automatically ducked under speech; output loudness is normalized so clips don't come out too quiet or clipping.
 - **Download only what your device can run** — premium models (Whisper, YAMNet, Silero, NIMA, face, on-device LLM) are optional, capability-gated downloads. The baseline works on any device with no downloads at all.
-- **Share in, share out** — appears in the system share sheet as a video target; exports straight back out to any app.
+- **Share, save & export** — push to the share sheet, save straight to your gallery, or write an `.srt` caption sidecar. Output as MP4 or WebM (VP9/Opus).
 
 ---
 
@@ -69,8 +70,8 @@ share / pick a video
   → build a low-res proxy            (fast, battery-friendly analysis copy)
   → analyze on-device                (one decode pass fans out every signal)
   → fuse + select                    (segment → score → diverse pick → arrange)
-  → render                           (subject-tracking reframe + captions → MP4)
-  → preview & share
+  → render                           (reframe + captions + music/loudness → MP4 or WebM)
+  → preview, save & share
 ```
 
 The analyzer samples the proxy a few times a second and computes per-moment signals; the **edit engine** — a small, deterministic core — normalizes them, scores each candidate segment with the active preset's weights, and uses a diversity-aware selection so the cut isn't five near-identical moments. Cuts snap to scene boundaries, silences, and sentence ends rather than landing mid-word.
@@ -95,7 +96,7 @@ Offered only when your device has the RAM and architecture to run them.
 
 | Feature | Model | Size |
 |---|---|---|
-| Auto captions | Whisper base / small | 57 / 182 MB |
+| Auto captions | Whisper small (recommended) / base | 182 / 57 MB |
 | Robust speech | Silero VAD | 2 MB |
 | Laughter & reactions | YAMNet | 4 MB |
 | Cinematic scoring | NIMA | 5 MB |
@@ -117,7 +118,7 @@ Modular Kotlin + Jetpack Compose, single-Activity, no XML UI.
 :edit-engine   the editing brain — pure Kotlin, deterministic, JVM-tested
 :ingest        SAF import, codec probe, Media3 proxy, GPMF telemetry parsing
 :analysis      native scene/motion/aesthetic (NDK) + audio + on-device ML
-:render        Media3 Transformer: trim, reframe, captions → MP4
+:render        Media3 Transformer: trim, reframe, captions, music/loudness → MP4/WebM
 :models        capability-based model catalog + verified downloads
 :app           Compose UI (Studio design system) + the import→share flow
 ```
