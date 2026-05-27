@@ -270,6 +270,7 @@ fun ImportScreen(initialVideo: Uri? = null, onOpenModels: () -> Unit = {}) {
                     val silero = pathIfInstalled("silero-vad")
                     val nima = pathIfInstalled("nima-mobilenet")
                     val clip = pathIfInstalled("clip-iqa")  // modern aesthetic/interest; supersedes NIMA
+                    val scene = pathIfInstalled("transnetv2")  // dissolve/fade-aware shot cuts
                     // One honest progress journey: analysis fills the first band, then
                     // transcription, then titling — never 100% until truly done.
                     val analysisBand = if (whisper != null) 0.5f else 1f
@@ -277,7 +278,7 @@ fun ImportScreen(initialVideo: Uri? = null, onOpenModels: () -> Unit = {}) {
                         context, proxy.absolutePath, meta.durationMs, meta.frameRate,
                         telemetry = telemetry, audioEventsModelPath = yamnet,
                         faceModelPath = face, sileroModelPath = silero, nimaModelPath = nima,
-                        clipModelPath = clip,
+                        clipModelPath = clip, sceneModelPath = scene,
                     ) { p ->
                         analyzeProgress = p.fraction * analysisBand
                         analyzeStage = if (p.stage == "Done") "Analyzing" else p.stage

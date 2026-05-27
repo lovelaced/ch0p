@@ -52,6 +52,7 @@ object AnalysisPipeline {
         sileroModelPath: String? = null,
         nimaModelPath: String? = null,
         clipModelPath: String? = null,
+        sceneModelPath: String? = null,
         progress: Progress = Progress { },
     ): Analysis {
         val retriever = MediaMetadataRetriever()
@@ -125,7 +126,12 @@ object AnalysisPipeline {
         }
 
         val n = motion.size
-        val sceneCount = cuts.size + 1
+        // TransNetV2 (if installed) replaces the classical cuts — it catches dissolves/fades the
+        // HSV detector misses. A dense 48×27 decode pass; falls back to native cuts on any failure.
+        val effectiveCuts: DoubleArray = sceneModelPath?.takeIf { File(it).exists() }?.let { mp ->
+            runCatching { TransNetScene(mp).use { it.detect(proxyPath, frameRate) } }.getOrNull()
+        }?.takeIf { it.isNotEmpty() }?.toDoubleArray() ?: cuts
+        val sceneCount = effectiveCuts.size + 1
         val faceCount = faceTargets.size
         progress.onProgress(AnalysisProgress(0.85f, "Analyzing audio", scenes = sceneCount, faces = faceCount))
         val pcm = AudioDecoder.decodeMono16k(proxyPath)
@@ -191,7 +197,7 @@ object AnalysisPipeline {
         return Analysis(
             durationMs = durationMs,
             frameRate = frameRate,
-            shots = ShotBuilder.fromCuts(cuts, durationMs),
+            shots = ShotBuilder.fromCuts(effectiveCuts, durationMs),
             sampleRateHz = SAMPLE_FPS,
             action = action,
             speech = speech,            // energy/ZCR VAD; Silero upgrade later
@@ -201,7 +207,7 @@ object AnalysisPipeline {
             aesthetic = aesthetic,
             interest = interest,
             cropTrajectory = if (faceTargets.size >= 2)
-                io.ch0p.edit.reframe.CropTrajectory.build(faceTargets, cuts.toList()) else emptyList(),
+                io.ch0p.edit.reframe.CropTrajectory.build(faceTargets, effectiveCuts.toList()) else emptyList(),
         )
     }
 

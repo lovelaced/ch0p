@@ -101,9 +101,9 @@ object ModelCatalog {
             5 * MB, "Apache-2.0", minRamMb = 4000, prefersNpu = true,
         ),
         ModelSpec(
-            "transnetv2", "TransNetV2 shot cuts", Feature.SCENE_ML, ModelRuntime.TFLITE,
-            null,  // convert soCzech/TransNetV2 weights -> tflite; pin url+hash
-            8 * MB, "MIT", minRamMb = 4000, prefersNpu = true,
+            "transnetv2", "TransNetV2 shot cuts", Feature.SCENE_ML, ModelRuntime.ONNX,
+            "https://huggingface.co/elya5/transnetv2/resolve/main/transnetv2.onnx",
+            31 * MB, "MIT", minRamMb = 4000, recommended = true,
         ),
         ModelSpec(
             "wav2small", "Speech arousal", Feature.SPEECH_EMOTION, ModelRuntime.ONNX,
