@@ -24,7 +24,9 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import io.ch0p.SettingsStore
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -34,7 +36,10 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import android.media.MediaMetadataRetriever
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -103,10 +108,28 @@ fun ImportScreen(initialVideo: Uri? = null, onOpenModels: () -> Unit = {}) {
     val store = remember { ModelStore(context) }
     val installedWhisper = remember { ModelCatalog.forFeature(Feature.AUTO_CAPTIONS).filter { store.isInstalled(it) } }
 
+    // Persisted preferences — last choice sticks, so the user doesn't re-pick every clip.
+    val settings = remember { SettingsStore(context) }
+    val transcriptionPref by settings.transcription.collectAsState(initial = "auto")
+    val formatPref by settings.format.collectAsState(initial = "MP4")
+    val defaultPresetId by settings.defaultPreset.collectAsState(initial = Presets.all.first().id)
+    // WebM export needs an on-device VP9 encoder (Pixels/Tensor have one).
+    val webmSupported = remember { CodecSupport.canEncode("video/x-vnd.on2.vp9") }
+
+    // Effective per-clip settings, derived from prefs.
+    val whisperModelId: String? = when (transcriptionPref) {
+        "off" -> null
+        "auto" -> installedWhisper.lastOrNull()?.id
+        else -> transcriptionPref.takeIf { id -> installedWhisper.any { it.id == id } } ?: installedWhisper.lastOrNull()?.id
+    }
+    val outputFormat = if (formatPref == "WEBM" && webmSupported) {
+        VideoRenderer.OutputFormat.WEBM
+    } else {
+        VideoRenderer.OutputFormat.MP4
+    }
+
     var ui by remember { mutableStateOf<ImportUi>(ImportUi.Idle) }
     var sourceUri by remember { mutableStateOf<Uri?>(null) }
-    // Transcription model for this clip: null = off (e.g. no speech). Defaults to best installed.
-    var whisperModelId by remember { mutableStateOf(installedWhisper.lastOrNull()?.id) }
     var proxyProgress by remember { mutableFloatStateOf(0f) }
     var analyzeProgress by remember { mutableFloatStateOf(0f) }
     var analyzeStage by remember { mutableStateOf("") }
@@ -114,9 +137,7 @@ fun ImportScreen(initialVideo: Uri? = null, onOpenModels: () -> Unit = {}) {
     var analyzeFaces by remember { mutableIntStateOf(0) }
     var analyzeLaughs by remember { mutableIntStateOf(0) }
     var renderProgress by remember { mutableFloatStateOf(0f) }
-    // WebM export needs an on-device VP9 encoder (Pixels/Tensor have one).
-    val webmSupported = remember { CodecSupport.canEncode("video/x-vnd.on2.vp9") }
-    var outputFormat by remember { mutableStateOf(VideoRenderer.OutputFormat.MP4) }
+    var previewFrame by remember { mutableStateOf<ImageBitmap?>(null) }
 
     fun startProxy(uri: Uri, meta: VideoMetadata) {
         ui = ImportUi.Proxying(meta)
@@ -300,12 +321,41 @@ fun ImportScreen(initialVideo: Uri? = null, onOpenModels: () -> Unit = {}) {
                         )
                     }
                 }
-                if (installedWhisper.isNotEmpty()) {
-                    item {
-                        TranscriptionPicker(installedWhisper, whisperModelId) { whisperModelId = it; haptics.scrubTick() }
+                item {
+                    LaunchedEffect(state.proxy.path) {
+                        previewFrame = withContext(Dispatchers.IO) {
+                            runCatching {
+                                val r = MediaMetadataRetriever()
+                                r.setDataSource(state.proxy.absolutePath)
+                                val dur = r.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull() ?: 0L
+                                val bmp = r.getScaledFrameAtTime(
+                                    (dur / 2) * 1000, MediaMetadataRetriever.OPTION_CLOSEST_SYNC, 512, 512,
+                                )
+                                r.release()
+                                bmp?.asImageBitmap()
+                            }.getOrNull()
+                        }
                     }
                 }
-                item { PresetPager(onSelect = { preset -> haptics.confirm(); runEdit(state.meta, state.proxy, preset) }) }
+                if (installedWhisper.isNotEmpty()) {
+                    item {
+                        TranscriptionPicker(installedWhisper, whisperModelId) { id ->
+                            scope.launch { settings.setTranscription(id ?: "off") }
+                            haptics.scrubTick()
+                        }
+                    }
+                }
+                item {
+                    PresetPager(
+                        initialPage = Presets.all.indexOfFirst { it.id == defaultPresetId }.coerceAtLeast(0),
+                        previewFrame = previewFrame,
+                        onSelect = { preset ->
+                            scope.launch { settings.setDefaultPreset(preset.id) }
+                            haptics.confirm()
+                            runEdit(state.meta, state.proxy, preset)
+                        },
+                    )
+                }
             }
 
             is ImportUi.Analyzing -> Unit  // rendered full-screen above
@@ -330,7 +380,7 @@ fun ImportScreen(initialVideo: Uri? = null, onOpenModels: () -> Unit = {}) {
                     }
                 }
                 items(state.edl.units) { entry -> EdlRow(entry.order, entry.srcInMs, entry.srcOutMs) }
-                item { FormatPicker(outputFormat, webmSupported) { outputFormat = it; haptics.scrubTick() } }
+                item { FormatPicker(outputFormat, webmSupported) { fmt -> scope.launch { settings.setFormat(fmt.name) }; haptics.scrubTick() } }
                 item {
                     PrimaryButton("Render ${outputFormat.name}") {
                         runRender(state.preset, state.edl, state.cropTrajectory, state.captionChunks, outputFormat)
