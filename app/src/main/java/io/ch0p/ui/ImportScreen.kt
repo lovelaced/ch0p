@@ -91,6 +91,10 @@ private sealed interface ImportUi {
         val title: String? = null,
         val cropTrajectory: List<CropKeyframe> = emptyList(),
         val captionChunks: List<CaptionChunk> = emptyList(),
+        val captionLanguage: String = "",        // detected ("en", "es", …); "" if no speech
+        val proxyPath: String? = null,           // for an on-demand English translate pass
+        val whisperModelPath: String? = null,
+        val captionSpans: List<LongRange> = emptyList(),
     ) : ImportUi
     data class Rendering(val presetName: String) : ImportUi
     data class Rendered(val output: File) : ImportUi
@@ -139,12 +143,16 @@ fun ImportScreen(initialVideo: Uri? = null, onOpenModels: () -> Unit = {}) {
     var analyzeLaughs by remember { mutableIntStateOf(0) }
     var renderProgress by remember { mutableFloatStateOf(0f) }
     var previewFrame by remember { mutableStateOf<ImageBitmap?>(null) }
+    // Caption language choice for non-English transcripts (burn original vs. English translation).
+    var captionEnglish by remember { mutableStateOf(false) }
+    var englishChunks by remember { mutableStateOf<List<CaptionChunk>?>(null) }
+    var translating by remember { mutableStateOf(false) }
 
     fun startProxy(uri: Uri, meta: VideoMetadata) {
         ui = ImportUi.Proxying(meta)
         proxyProgress = 0f
         proxyGen.start(
-            uri, ProxySpec.forSource(meta.width, meta.height, fps = meta.frameRate),
+            uri, ProxySpec.forSource(meta.orientedWidth, meta.orientedHeight, fps = meta.frameRate),
             object : ProxyGenerator.Callback {
                 override fun onComplete(proxyFile: File) { ui = ImportUi.Ready(meta, proxyFile) }
                 override fun onError(message: String, cause: Throwable?) { ui = ImportUi.Failed(message) }
@@ -190,10 +198,30 @@ fun ImportScreen(initialVideo: Uri? = null, onOpenModels: () -> Unit = {}) {
         )
     }
 
+    // On-demand English captions for a non-English transcript: re-run whisper in translate mode
+    // over the same clips (word timing preserved), then chunk for karaoke burn-in.
+    fun translateCaptions(state: ImportUi.Edited) {
+        val model = state.whisperModelPath ?: return
+        val proxy = state.proxyPath ?: return
+        if (state.captionSpans.isEmpty() || translating) return
+        translating = true
+        scope.launch {
+            val eng = runCatching {
+                withContext(Dispatchers.IO) {
+                    Transcriber.transcribeSpans(proxy, model, state.captionSpans, translate = true)
+                }
+            }.getOrNull()
+            englishChunks = eng?.words?.let { CaptionChunker.chunk(it) } ?: emptyList()
+            captionEnglish = true
+            translating = false
+        }
+    }
+
     fun runEdit(meta: VideoMetadata, proxy: File, preset: Preset) {
         ui = ImportUi.Analyzing(preset.displayName)
         analyzeProgress = 0f
         analyzeStage = "Starting"
+        captionEnglish = false; englishChunks = null; translating = false  // fresh per edit
         scope.launch {
             ui = runCatching {
                 withContext(Dispatchers.IO) {
@@ -226,17 +254,18 @@ fun ImportScreen(initialVideo: Uri? = null, onOpenModels: () -> Unit = {}) {
                     // Transcribe ONLY the selected clips, and only when speech is actually present —
                     // bounds it to the short's length (seconds), not the whole source.
                     val hasSpeech = analysis.speech.isNotEmpty() && analysis.speech.average() > 0.12
-                    val words = if (whisper != null && hasSpeech) {
+                    val spans = edl.units.map { it.srcInMs..it.srcOutMs }
+                    val transcript = if (whisper != null && hasSpeech) {
                         analyzeStage = "Transcribing ${edl.units.size} clips"
                         analyzeProgress = analysisBand
-                        val spans = edl.units.map { it.srcInMs..it.srcOutMs }
                         Transcriber.transcribeSpans(proxy.absolutePath, whisper, spans) { f ->
                             analyzeProgress = analysisBand + f * (0.95f - analysisBand)
                         }
                     } else {
                         analyzeProgress = 0.95f  // nothing to transcribe — fill the bar
-                        emptyList()
+                        Transcriber.Transcript(emptyList(), "")
                     }
+                    val words = transcript.words
 
                     val title = if (words.isNotEmpty()) {
                         pathIfInstalled("gemma3-1b")?.let { p ->
@@ -248,7 +277,13 @@ fun ImportScreen(initialVideo: Uri? = null, onOpenModels: () -> Unit = {}) {
                     } else null
                     val captions = if (preset.captions) CaptionChunker.chunk(words) else emptyList()
                     analyzeStage = "Done"; analyzeProgress = 1f
-                    ImportUi.Edited(preset, edl, title, analysis.cropTrajectory, captions)
+                    ImportUi.Edited(
+                        preset, edl, title, analysis.cropTrajectory, captions,
+                        captionLanguage = transcript.language,
+                        proxyPath = proxy.absolutePath,
+                        whisperModelPath = whisper,
+                        captionSpans = spans,
+                    )
                 }
             }.getOrElse { ImportUi.Failed(it.message ?: "Analysis failed") }
         }
@@ -400,10 +435,26 @@ fun ImportScreen(initialVideo: Uri? = null, onOpenModels: () -> Unit = {}) {
                     }
                 }
                 items(state.edl.units) { entry -> EdlRow(entry.order, entry.srcInMs, entry.srcOutMs) }
+                val nonEnglish = state.captionLanguage.isNotBlank() &&
+                    !state.captionLanguage.startsWith("en") && state.captionChunks.isNotEmpty()
+                val chosenChunks = if (captionEnglish) (englishChunks ?: state.captionChunks) else state.captionChunks
+                if (nonEnglish) item {
+                    CaptionLanguageCard(
+                        language = Locale(state.captionLanguage).getDisplayLanguage(Locale.US)
+                            .ifBlank { state.captionLanguage.uppercase(Locale.US) },
+                        english = captionEnglish,
+                        translating = translating,
+                        onKeep = { captionEnglish = false; haptics.scrubTick() },
+                        onEnglish = {
+                            haptics.scrubTick()
+                            if (englishChunks != null) captionEnglish = true else translateCaptions(state)
+                        },
+                    )
+                }
                 item { FormatPicker(outputFormat, webmSupported) { fmt -> scope.launch { settings.setFormat(fmt.name) }; haptics.scrubTick() } }
                 item {
-                    PrimaryButton("Render ${outputFormat.name}") {
-                        runRender(state.preset, state.edl, state.cropTrajectory, state.captionChunks, outputFormat)
+                    PrimaryButton(if (translating) "Translating…" else "Render ${outputFormat.name}") {
+                        if (!translating) runRender(state.preset, state.edl, state.cropTrajectory, chosenChunks, outputFormat)
                     }
                 }
                 item { Text("Start over", style = t.label, color = c.textMid,
@@ -523,6 +574,26 @@ private fun FormatPicker(
         }
         if (!webmSupported) {
             Text("WebM needs a VP9 encoder — not available on this device.", style = t.label, color = c.textLow)
+        }
+    }
+}
+
+@Composable
+private fun CaptionLanguageCard(
+    language: String,
+    english: Boolean,
+    translating: Boolean,
+    onKeep: () -> Unit,
+    onEnglish: () -> Unit,
+) {
+    val c = AppTheme.colors
+    val t = AppTheme.type
+    Column(Modifier.padding(vertical = Space.sm), verticalArrangement = Arrangement.spacedBy(Space.xs)) {
+        Text("CAPTIONS · ${language.uppercase(Locale.US)} DETECTED", style = t.micro, color = c.accentMagic)
+        Text("Burn in $language, or translate to English?", style = t.label, color = c.textMid)
+        Row(horizontalArrangement = Arrangement.spacedBy(Space.sm)) {
+            Choice(language, !english, onKeep)
+            Choice(if (translating) "Translating…" else "English", english, onEnglish)
         }
     }
 }

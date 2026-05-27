@@ -18,23 +18,28 @@ class Whisper(modelPath: String) : AutoCloseable {
 
     /**
      * @param pcm16k mono 16 kHz 16-bit PCM. @param language "auto" or e.g. "en".
+     * @param translate when true, output English regardless of spoken language (task=translate).
      * @param onProgress whisper's 0..100 progress during the (single) pass.
      */
     fun transcribe(
         pcm16k: ShortArray,
         language: String = "auto",
         threads: Int = 4,
+        translate: Boolean = false,
         onProgress: (Int) -> Unit = {},
     ): List<Word> {
         if (ctx == 0L || pcm16k.isEmpty()) return emptyList()
         val floats = FloatArray(pcm16k.size) { pcm16k[it] / 32768f }
         progressSink = onProgress
         return try {
-            WhisperParser.parse(nativeTranscribe(ctx, floats, language, threads))
+            WhisperParser.parse(nativeTranscribe(ctx, floats, language, threads, translate))
         } finally {
             progressSink = null
         }
     }
+
+    /** Language auto-detected by the most recent [transcribe] (e.g. "en", "es"); "" if unknown. */
+    fun detectedLanguage(): String = if (ctx != 0L) nativeLanguage(ctx) else ""
 
     /** Called from native (whisper progress_callback) on the transcribing thread. */
     @Suppress("unused")
@@ -47,7 +52,8 @@ class Whisper(modelPath: String) : AutoCloseable {
     }
 
     private external fun nativeInit(modelPath: String): Long
-    private external fun nativeTranscribe(handle: Long, pcm: FloatArray, lang: String, threads: Int): String
+    private external fun nativeTranscribe(handle: Long, pcm: FloatArray, lang: String, threads: Int, translate: Boolean): String
+    private external fun nativeLanguage(handle: Long): String
     private external fun nativeFree(handle: Long)
 
     companion object {

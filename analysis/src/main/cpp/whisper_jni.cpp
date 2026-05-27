@@ -33,7 +33,8 @@ void progressCb(struct whisper_context*, struct whisper_state*, int progress, vo
 
 JNIEXPORT jstring JNICALL
 Java_io_ch0p_analysis_Whisper_nativeTranscribe(
-        JNIEnv* env, jobject thiz, jlong handle, jfloatArray pcm, jstring lang, jint threads) {
+        JNIEnv* env, jobject thiz, jlong handle, jfloatArray pcm, jstring lang, jint threads,
+        jboolean translate) {
     auto* ctx = reinterpret_cast<whisper_context*>(handle);
     if (ctx == nullptr) return env->NewStringUTF("");
 
@@ -58,8 +59,9 @@ Java_io_ch0p_analysis_Whisper_nativeTranscribe(
         if (ac > 1500) ac = 1500;
         wparams.audio_ctx = ac;
     }
+    wparams.translate = translate == JNI_TRUE; // task=translate → English output
     const char* l = env->GetStringUTFChars(lang, nullptr);
-    wparams.language = l;                      // "auto" or e.g. "en"
+    wparams.language = l;                      // "auto" (detect) or e.g. "en"
 
     jclass cls = env->GetObjectClass(thiz);
     ProgressCtx pc { env, thiz, env->GetMethodID(cls, "progressCallback", "(I)V") };
@@ -105,6 +107,16 @@ Java_io_ch0p_analysis_Whisper_nativeTranscribe(
         flush();  // segment boundary ends a word
     }
     return env->NewStringUTF(out.c_str());
+}
+
+// Language auto-detected by the most recent nativeTranscribe (e.g. "en", "es"); "" if unknown.
+JNIEXPORT jstring JNICALL
+Java_io_ch0p_analysis_Whisper_nativeLanguage(JNIEnv* env, jobject, jlong handle) {
+    auto* ctx = reinterpret_cast<whisper_context*>(handle);
+    if (ctx == nullptr) return env->NewStringUTF("");
+    const int id = whisper_full_lang_id(ctx);
+    const char* code = id >= 0 ? whisper_lang_str(id) : "";
+    return env->NewStringUTF(code != nullptr ? code : "");
 }
 
 JNIEXPORT void JNICALL
