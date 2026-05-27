@@ -5,7 +5,7 @@ enum class Feature(val displayName: String, val description: String) {
     AUTO_CAPTIONS("Auto captions", "Word-timed karaoke subtitles + speech-aware cuts (Whisper)"),
     ROBUST_VAD("Robust speech detection", "Music/noise-robust voice activity (Silero)"),
     LAUGHTER_DETECTION("Laughter & reactions", "Detect laughter, applause, music, cheering (YAMNet)"),
-    AESTHETIC_SCORING("Cinematic scoring", "Learned shot-quality / aesthetic score (NIMA)"),
+    AESTHETIC_SCORING("Cinematic scoring", "Modern shot-quality + aesthetic + interest scoring (CLIP-IQA)"),
     FACE_TRACKING("Face & expression", "Faces = interest, active-speaker, expression intensity"),
     SMART_REFRAME("Smart reframe", "Subject-tracking vertical reframe (AutoFlip-style)"),
     POSE_ACTION("Action recognition", "Pose / semantic action understanding (MoViNet / Pose)"),
@@ -66,6 +66,11 @@ object ModelCatalog {
             4 * MB, "Apache-2.0", minRamMb = 2000,
         ),
         ModelSpec(
+            "clip-iqa", "CLIP-IQA aesthetic (recommended)", Feature.AESTHETIC_SCORING, ModelRuntime.ONNX,
+            "https://huggingface.co/Xenova/clip-vit-base-patch32/resolve/main/onnx/vision_model_int8.onnx",
+            89 * MB, "MIT", minRamMb = 4000, recommended = true,
+        ),
+        ModelSpec(
             "nima-mobilenet", "NIMA aesthetic", Feature.AESTHETIC_SCORING, ModelRuntime.TFLITE,
             null,  // convert from titu1994/neural-image-assessment (MIT) -> int8 tflite; pin url+hash
             5 * MB, "MIT", minRamMb = 3000,
@@ -122,7 +127,7 @@ object ModelCatalog {
      * what the import-screen nudge offers. (Excludes import-only / license-gated / huge models.)
      */
     val essentials: List<ModelSpec> =
-        listOf("whisper-small-q5", "silero-vad", "yamnet", "blazeface-short").mapNotNull { id -> all.firstOrNull { it.id == id } }
+        listOf("whisper-small-q5", "clip-iqa", "silero-vad", "yamnet", "blazeface-short").mapNotNull { id -> all.firstOrNull { it.id == id } }
 
     fun byId(id: String): ModelSpec? = all.firstOrNull { it.id == id }
 

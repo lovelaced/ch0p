@@ -26,6 +26,7 @@ object AnalysisPipeline {
 
     private const val SAMPLE_FPS = 4.0
     private const val ANALYZE_WIDTH = 160  // downscale frames for cheap native analysis
+    private const val CLIP_EVERY = 4       // run CLIP-IQA every Nth sampled frame (~1 fps) — it's heavy
 
     /** Live telemetry for the Analyzing screen — counts populate as stages complete. */
     data class AnalysisProgress(
@@ -50,6 +51,7 @@ object AnalysisPipeline {
         faceModelPath: String? = null,
         sileroModelPath: String? = null,
         nimaModelPath: String? = null,
+        clipModelPath: String? = null,
         progress: Progress = Progress { },
     ): Analysis {
         val retriever = MediaMetadataRetriever()
@@ -60,6 +62,13 @@ object AnalysisPipeline {
         val nimaScorer = nimaModelPath?.takeIf { File(it).exists() }
             ?.let { runCatching { NimaScorer(it) }.getOrNull() }
         val nimaScores = ArrayList<Float>()
+        // CLIP-IQA (modern aesthetic/quality/interest); scored at a coarse cadence (cost).
+        val clipScorer = clipModelPath?.takeIf { File(it).exists() }
+            ?.let { runCatching { ClipScorer(context, it) }.getOrNull()?.takeIf { s -> s.isReady } }
+        val clipQuality = ArrayList<Float>()
+        val clipAesthetic = ArrayList<Float>()
+        val clipInterest = ArrayList<Float>()
+        var clipFrame = 0
         val (motion, sharp, color, cuts) = try {
             retriever.setDataSource(proxyPath)
             val srcW = meta(retriever, MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH) ?: 16
@@ -81,6 +90,12 @@ object AnalysisPipeline {
                     if (nimaScorer != null) {
                         nimaScores.add(runCatching { nimaScorer.score(bmp) }.getOrDefault(0f))
                     }
+                    if (clipScorer != null && clipFrame % CLIP_EVERY == 0) {
+                        runCatching { clipScorer.score(bmp) }.getOrNull()?.let {
+                            clipQuality.add(it.quality); clipAesthetic.add(it.aesthetic); clipInterest.add(it.interest)
+                        }
+                    }
+                    clipFrame++
                     na.pushFrame(bitmapToRgb(bmp), bmp.width, bmp.height, tMs / 1000.0)
                     bmp.recycle()
                     if (durationMs > 0) progress.onProgress(
@@ -105,6 +120,7 @@ object AnalysisPipeline {
         } finally {
             runCatching { faceAnalyzer?.close() }
             runCatching { nimaScorer?.close() }
+            runCatching { clipScorer?.close() }
             runCatching { retriever.release() }
         }
 
@@ -132,8 +148,15 @@ object AnalysisPipeline {
         val laughCount = laughterHi.count { it > 0.4f }
         progress.onProgress(AnalysisProgress(0.95f, "Assembling", sceneCount, faceCount, laughCount))
         var aesthetic = fuseNormalized(sharp, color, n)
-        // NIMA learned aesthetic blends with the classical metrics when installed.
-        if (nimaScores.isNotEmpty()) {
+        // CLIP-IQA (modern) dominates the aesthetic when installed: technical quality is the
+        // validated-robust signal, blended with the learned beauty score, over the classical fuse.
+        if (clipQuality.isNotEmpty()) {
+            val q = resampleTo(clipQuality.toFloatArray(), n)
+            val a = resampleTo(clipAesthetic.toFloatArray(), n)
+            val clip = FloatArray(n) { 0.6f * q[it] + 0.4f * a[it] }
+            aesthetic = FloatArray(n) { 0.7f * clip[it] + 0.3f * aesthetic[it] }
+        } else if (nimaScores.isNotEmpty()) {
+            // NIMA learned aesthetic blends with the classical metrics when installed.
             val nima = clampLen(nimaScores.toFloatArray(), n)
             aesthetic = FloatArray(n) { 0.5f * aesthetic[it] + 0.5f * nima[it] }
         }
@@ -142,6 +165,12 @@ object AnalysisPipeline {
         val speech = resampleTo(speechHi, n)
         val drama = swell(loudness)
         var interest = combine(action, aesthetic) { a, b -> 0.5f * a + 0.5f * b }.let { normalize(it) }
+
+        // CLIP-IQA semantic "interesting moment" score boosts interest when installed.
+        if (clipInterest.isNotEmpty()) {
+            val ci = resampleTo(clipInterest.toFloatArray(), n)
+            interest = normalize(FloatArray(n) { 0.6f * interest[it] + 0.4f * ci[it] })
+        }
 
         // Faces are a strong interest cue — blend the per-frame face score in when available.
         if (faceScores.isNotEmpty()) {
