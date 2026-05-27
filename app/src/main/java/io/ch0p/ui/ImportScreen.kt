@@ -90,7 +90,7 @@ private sealed interface ImportUi {
 }
 
 @Composable
-fun ImportScreen(onOpenModels: () -> Unit = {}) {
+fun ImportScreen(initialVideo: Uri? = null, onOpenModels: () -> Unit = {}) {
     val haptics = AppTheme.haptics
     val c = AppTheme.colors
     val t = AppTheme.type
@@ -108,6 +108,37 @@ fun ImportScreen(onOpenModels: () -> Unit = {}) {
     var analyzeFaces by remember { mutableIntStateOf(0) }
     var analyzeLaughs by remember { mutableIntStateOf(0) }
     var renderProgress by remember { mutableFloatStateOf(0f) }
+
+    fun startProxy(uri: Uri, meta: VideoMetadata) {
+        ui = ImportUi.Proxying(meta)
+        proxyProgress = 0f
+        proxyGen.start(
+            uri, ProxySpec.forSource(meta.width, meta.height, fps = meta.frameRate),
+            object : ProxyGenerator.Callback {
+                override fun onComplete(proxyFile: File) { ui = ImportUi.Ready(meta, proxyFile) }
+                override fun onError(message: String, cause: Throwable?) { ui = ImportUi.Failed(message) }
+            },
+        )
+    }
+
+    // Share-in / pick → probe → (auto) proxy, no extra taps.
+    fun beginImport(uri: Uri) {
+        sourceUri = uri
+        runCatching {
+            context.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+        ui = ImportUi.Probing
+        scope.launch {
+            val probed = runCatching {
+                val meta = withContext(Dispatchers.IO) { MediaProbe.probe(context, uri) }
+                meta to CodecSupport.assessRisk(meta)
+            }.getOrNull()
+            if (probed == null) { ui = ImportUi.Failed("Could not read this file"); return@launch }
+            val (meta, risk) = probed
+            if (!risk.isUsable) { ui = ImportUi.Failed(risk.reasons.joinToString("\n")); return@launch }
+            startProxy(uri, meta)
+        }
+    }
 
     fun runRender(
         preset: Preset,
@@ -174,18 +205,12 @@ fun ImportScreen(onOpenModels: () -> Unit = {}) {
     }
 
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-        if (uri == null) return@rememberLauncherForActivityResult
-        runCatching {
-            context.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
-        }
-        sourceUri = uri
-        ui = ImportUi.Probing
-        scope.launch {
-            ui = runCatching {
-                val meta = withContext(Dispatchers.IO) { MediaProbe.probe(context, uri) }
-                ImportUi.Probed(uri, meta, CodecSupport.assessRisk(meta))
-            }.getOrElse { ImportUi.Failed(it.message ?: "Could not read this file") }
-        }
+        uri?.let { beginImport(it) }
+    }
+
+    // A video shared into the app: jump straight into processing.
+    LaunchedEffect(initialVideo) {
+        if (initialVideo != null && ui is ImportUi.Idle) beginImport(initialVideo)
     }
 
     // The Analyzing state is a full-screen signature takeover, not a list item.
@@ -228,30 +253,7 @@ fun ImportScreen(onOpenModels: () -> Unit = {}) {
 
             is ImportUi.Probing -> item { Notice("Reading file…", c.accentActive) }
 
-            is ImportUi.Probed -> {
-                item { MetadataCard(state.meta) }
-                item { RiskNotice(state.risk) }
-                if (state.risk.isUsable) {
-                    item {
-                        PrimaryButton("Create proxy & analyze") {
-                            ui = ImportUi.Proxying(state.meta)
-                            proxyProgress = 0f
-                            proxyGen.start(
-                                state.uri,
-                                ProxySpec.forSource(state.meta.width, state.meta.height, fps = state.meta.frameRate),
-                                object : ProxyGenerator.Callback {
-                                    override fun onComplete(proxyFile: File) {
-                                        ui = ImportUi.Ready(state.meta, proxyFile)
-                                    }
-                                    override fun onError(message: String, cause: Throwable?) {
-                                        ui = ImportUi.Failed(message)
-                                    }
-                                },
-                            )
-                        }
-                    }
-                }
-            }
+            is ImportUi.Probed -> Unit  // auto-advances to Proxying; no manual step
 
             is ImportUi.Proxying -> {
                 item { MetadataCard(state.meta) }
@@ -360,7 +362,13 @@ fun ImportScreen(onOpenModels: () -> Unit = {}) {
                         style = t.body, color = c.textMid,
                     )
                 }
-                item { PrimaryButton("Edit another") { ui = ImportUi.Idle } }
+                item { PrimaryButton("Share clip") { shareVideo(context, state.output) } }
+                item {
+                    Text(
+                        "Edit another", style = t.label, color = c.textMid,
+                        modifier = Modifier.fillMaxWidth().clickable { ui = ImportUi.Idle }.padding(Space.md),
+                    )
+                }
             }
         }
     }
@@ -382,6 +390,16 @@ private fun EdlRow(order: Int, srcInMs: Long, srcOutMs: Long) {
         Text("${formatClock(srcInMs)} → ${formatClock(srcOutMs)}", style = t.timecode, color = c.textHi)
         Text("${"%.1f".format((srcOutMs - srcInMs) / 1000.0)}s", style = t.timecode, color = c.textMid)
     }
+}
+
+private fun shareVideo(context: android.content.Context, file: File) {
+    val uri = androidx.core.content.FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
+    val intent = Intent(Intent.ACTION_SEND).apply {
+        type = "video/mp4"
+        putExtra(Intent.EXTRA_STREAM, uri)
+        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+    }
+    context.startActivity(Intent.createChooser(intent, "Share clip"))
 }
 
 private fun formatClock(ms: Long): String {
