@@ -46,6 +46,7 @@ import androidx.compose.ui.unit.dp
 import io.ch0p.analysis.AnalysisPipeline
 import io.ch0p.analysis.LlmEngine
 import io.ch0p.analysis.SemanticEditor
+import io.ch0p.analysis.Transcriber
 import io.ch0p.edit.AutoEditor
 import io.ch0p.edit.EditDecisionList
 import io.ch0p.edit.Preset
@@ -211,23 +212,31 @@ fun ImportScreen(initialVideo: Uri? = null, onOpenModels: () -> Unit = {}) {
                     val analysis = AnalysisPipeline.analyze(
                         context, proxy.absolutePath, meta.durationMs, meta.frameRate,
                         telemetry = telemetry, audioEventsModelPath = yamnet,
-                        whisperModelPath = whisper, faceModelPath = face,
-                        sileroModelPath = silero, nimaModelPath = nima,
+                        faceModelPath = face, sileroModelPath = silero, nimaModelPath = nima,
                     ) { p ->
                         analyzeProgress = p.fraction; analyzeStage = p.stage
                         analyzeScenes = p.scenes; analyzeFaces = p.faces; analyzeLaughs = p.laughs
                     }
                     val edl = AutoEditor.edit(analysis, preset)
-                    // Optional on-device LLM title (Gemma), if installed and we have a transcript.
-                    val title = pathIfInstalled("gemma3-1b")
-                        ?.takeIf { analysis.words.isNotEmpty() }
-                        ?.let { p ->
+
+                    // Transcribe ONLY the selected clips, and only when speech is actually present —
+                    // bounds it to the short's length (seconds), not the whole source.
+                    val hasSpeech = analysis.speech.isNotEmpty() && analysis.speech.average() > 0.12
+                    val words = if (whisper != null && hasSpeech) {
+                        val spans = edl.units.map { it.srcInMs..it.srcOutMs }
+                        Transcriber.transcribeSpans(proxy.absolutePath, whisper, spans) { f ->
+                            analyzeProgress = f; analyzeStage = "Transcribing ${edl.units.size} clips"
+                        }
+                    } else emptyList()
+
+                    val title = if (words.isNotEmpty()) {
+                        pathIfInstalled("gemma3-1b")?.let { p ->
                             analyzeStage = "Writing title"
-                            runCatching { LlmEngine(context, p).use { SemanticEditor(it).analyze(analysis.words).title } }
+                            runCatching { LlmEngine(context, p).use { SemanticEditor(it).analyze(words).title } }
                                 .getOrNull()?.takeIf { it.isNotBlank() }
                         }
-                    val captions = if (preset.captions && analysis.words.isNotEmpty())
-                        CaptionChunker.chunk(analysis.words) else emptyList()
+                    } else null
+                    val captions = if (preset.captions) CaptionChunker.chunk(words) else emptyList()
                     ImportUi.Edited(preset, edl, title, analysis.cropTrajectory, captions)
                 }
             }.getOrElse { ImportUi.Failed(it.message ?: "Analysis failed") }

@@ -47,7 +47,6 @@ object AnalysisPipeline {
         frameRate: Double,
         telemetry: Telemetry? = null,
         audioEventsModelPath: String? = null,
-        whisperModelPath: String? = null,
         faceModelPath: String? = null,
         sileroModelPath: String? = null,
         nimaModelPath: String? = null,
@@ -121,13 +120,9 @@ object AnalysisPipeline {
             }.getOrDefault(FloatArray(0))
         } else FloatArray(0)
 
-        // Whisper ASR (word-timed transcript) — only if a GGML model is installed.
+        // Transcription is deferred to the selected clips (see Transcriber) — not run over
+        // the whole source here, which is what made it "transcribe forever".
         val laughCount = laughterHi.count { it > 0.4f }
-        val transcript: List<io.ch0p.edit.Word> = if (whisperModelPath != null && File(whisperModelPath).exists()) {
-            progress.onProgress(AnalysisProgress(0.9f, "Transcribing", sceneCount, faceCount, laughCount))
-            runCatching { Whisper(whisperModelPath).use { it.transcribe(pcm) } }.getOrDefault(emptyList())
-        } else emptyList()
-
         progress.onProgress(AnalysisProgress(0.95f, "Assembling", sceneCount, faceCount, laughCount))
         var aesthetic = fuseNormalized(sharp, color, n)
         // NIMA learned aesthetic blends with the classical metrics when installed.
@@ -169,7 +164,6 @@ object AnalysisPipeline {
             drama = drama,
             aesthetic = aesthetic,
             interest = interest,
-            words = transcript,
             cropTrajectory = if (faceTargets.size >= 2)
                 io.ch0p.edit.reframe.CropTrajectory.build(faceTargets, cuts.toList()) else emptyList(),
         )
