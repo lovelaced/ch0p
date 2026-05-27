@@ -69,29 +69,36 @@ object AnalysisPipeline {
 
             NativeAnalyzer().use { na ->
                 val stepMs = (1000.0 / SAMPLE_FPS).toLong()
-                var tMs = 0L
-                while (tMs < durationMs) {
-                    val bmp = retriever.getScaledFrameAtTime(
-                        tMs * 1000, MediaMetadataRetriever.OPTION_CLOSEST_SYNC, dstW, dstH,
-                    )
-                    if (bmp != null) {
-                        if (faceAnalyzer != null) {
-                            val ff = runCatching { faceAnalyzer.detect(bmp) }.getOrDefault(FaceScoring.EMPTY)
-                            faceScores.add(ff.score)
-                            if (ff.hasFace) faceTargets.add(
-                                io.ch0p.edit.reframe.SubjectTarget(tMs / 1000.0, ff.cx.toDouble(), ff.cy.toDouble(), ff.size.toDouble()),
-                            )
-                        }
-                        if (nimaScorer != null) {
-                            nimaScores.add(runCatching { nimaScorer.score(bmp) }.getOrDefault(0f))
-                        }
-                        na.pushFrame(bitmapToRgb(bmp), bmp.width, bmp.height, tMs / 1000.0)
-                        bmp.recycle()
+                // Per-frame work, shared by the fast forward-decode path and the fallback.
+                val process = { bmp: Bitmap, tMs: Long ->
+                    if (faceAnalyzer != null) {
+                        val ff = runCatching { faceAnalyzer.detect(bmp) }.getOrDefault(FaceScoring.EMPTY)
+                        faceScores.add(ff.score)
+                        if (ff.hasFace) faceTargets.add(
+                            io.ch0p.edit.reframe.SubjectTarget(tMs / 1000.0, ff.cx.toDouble(), ff.cy.toDouble(), ff.size.toDouble()),
+                        )
                     }
+                    if (nimaScorer != null) {
+                        nimaScores.add(runCatching { nimaScorer.score(bmp) }.getOrDefault(0f))
+                    }
+                    na.pushFrame(bitmapToRgb(bmp), bmp.width, bmp.height, tMs / 1000.0)
+                    bmp.recycle()
                     if (durationMs > 0) progress.onProgress(
                         AnalysisProgress((tMs.toFloat() / durationMs) * 0.8f, "Analyzing video", faces = faceTargets.size),
                     )
-                    tMs += stepMs
+                }
+
+                // Single forward decode → TRUE consecutive frames (accurate motion/cut signals).
+                val emitted = FrameSampler.sample(proxyPath, dstW, dstH, stepMs, process)
+                if (emitted == 0) {
+                    // Fallback: keyframe-snapping retriever (coarse, but keeps analysis working).
+                    var tMs = 0L
+                    while (tMs < durationMs) {
+                        retriever.getScaledFrameAtTime(
+                            tMs * 1000, MediaMetadataRetriever.OPTION_CLOSEST_SYNC, dstW, dstH,
+                        )?.let { process(it, tMs) }
+                        tMs += stepMs
+                    }
                 }
                 NativeResult(na.motionCurve(), na.sharpnessCurve(), na.colorfulnessCurve(), na.cutTimesSec())
             }
