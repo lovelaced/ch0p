@@ -105,12 +105,18 @@ fun ModelsScreen(onBack: () -> Unit) {
                 Text("Models", style = t.displayL, color = c.textHi,
                     modifier = Modifier.padding(top = Space.sm))
                 Text(
-                    deviceSummary(cap),
+                    "ch0p already works with zero downloads. Add models below for captions, reactions, faces, and sharper picks — all on-device, no account, nothing uploaded.",
                     style = t.body, color = c.textMid, modifier = Modifier.padding(top = Space.xs),
+                )
+                // Capability: what this specific phone can run.
+                val runnable = remember(cap) { ModelCatalog.all.count { cap.canRun(it) } }
+                Text(
+                    "${deviceSummary(cap)} — can run $runnable of ${ModelCatalog.all.size}.",
+                    style = t.label, color = c.textMid, modifier = Modifier.padding(top = Space.sm),
                 )
                 val active = ModelCatalog.featuresFor(installed)
                 Text(
-                    if (active.isEmpty()) "No premium models installed — download below"
+                    if (active.isEmpty()) "Using the built-in scene, motion & camera-telemetry signals."
                     else "ACTIVE: " + active.joinToString(" · ") { it.displayName },
                     style = t.label,
                     color = if (active.isEmpty()) c.textLow else c.success,

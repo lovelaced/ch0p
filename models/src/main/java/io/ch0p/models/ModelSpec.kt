@@ -117,6 +117,13 @@ object ModelCatalog {
         ),
     )
 
+    /**
+     * Curated, downloadable models that give the biggest quality jump for most footage —
+     * what the import-screen nudge offers. (Excludes import-only / license-gated / huge models.)
+     */
+    val essentials: List<ModelSpec> =
+        listOf("whisper-small-q5", "silero-vad", "yamnet", "blazeface-short").mapNotNull { id -> all.firstOrNull { it.id == id } }
+
     fun byId(id: String): ModelSpec? = all.firstOrNull { it.id == id }
 
     fun forFeature(feature: Feature): List<ModelSpec> = all.filter { it.feature == feature }

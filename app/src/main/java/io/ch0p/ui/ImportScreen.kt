@@ -37,6 +37,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import android.media.MediaMetadataRetriever
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
@@ -62,6 +63,7 @@ import io.ch0p.ingest.ProxyGenerator
 import io.ch0p.ingest.ProxySpec
 import io.ch0p.ingest.VideoMetadata
 import io.ch0p.ingest.telemetry.TelemetryExtractor
+import io.ch0p.models.DeviceCapability
 import io.ch0p.models.Feature
 import io.ch0p.models.ModelCatalog
 import io.ch0p.models.ModelSpec
@@ -117,12 +119,20 @@ fun ImportScreen(initialVideo: Uri? = null, onOpenModels: () -> Unit = {}) {
     val renderer = remember { VideoRenderer(context) }
     val store = remember { ModelStore(context) }
     val installedWhisper = remember { ModelCatalog.forFeature(Feature.AUTO_CAPTIONS).filter { store.isInstalled(it) } }
+    // Capability-aware "unlock best quality" nudge: which high-value models this phone can run
+    // but hasn't installed yet. Re-read on (re)entry to the screen.
+    val capability = remember { DeviceCapability.probe(context) }
+    val installedModelIds = remember { store.installed().map { it.id }.toSet() }
+    val missingEssentials = remember(installedModelIds) {
+        ModelCatalog.essentials.filter { capability.canRun(it) && it.id !in installedModelIds }
+    }
 
     // Persisted preferences — last choice sticks, so the user doesn't re-pick every clip.
     val settings = remember { SettingsStore(context) }
     val transcriptionPref by settings.transcription.collectAsState(initial = "auto")
     val formatPref by settings.format.collectAsState(initial = "MP4")
     val defaultPresetId by settings.defaultPreset.collectAsState(initial = Presets.all.first().id)
+    val nudgeDismissed by settings.modelsNudgeDismissed.collectAsState(initial = true)  // true = no flash before load
     // WebM export needs an on-device VP9 encoder (Pixels/Tensor have one).
     val webmSupported = remember { CodecSupport.canEncode("video/x-vnd.on2.vp9") }
 
@@ -375,6 +385,16 @@ fun ImportScreen(initialVideo: Uri? = null, onOpenModels: () -> Unit = {}) {
         when (val state = ui) {
             is ImportUi.Idle, is ImportUi.Failed -> {
                 item { ImportButton { picker.launch(arrayOf("video/*")) } }
+                if (state is ImportUi.Idle && !nudgeDismissed && missingEssentials.isNotEmpty()) {
+                    item {
+                        QualityBanner(
+                            cap = capability,
+                            missing = missingEssentials,
+                            onOpen = { haptics.scrubTick(); onOpenModels() },
+                            onDismiss = { scope.launch { settings.dismissModelsNudge() } },
+                        )
+                    }
+                }
                 if (state is ImportUi.Failed) {
                     item { Notice(state.message, c.danger) }
                     sourceUri?.let { uri ->
@@ -673,6 +693,75 @@ private fun FormatPicker(
             Text("WebM needs a VP9 encoder — not available on this device.", style = t.label, color = c.textLow)
         }
     }
+}
+
+/**
+ * The "unlock best quality" nudge: ch0p works with zero downloads, but on-device models add a
+ * real quality jump. Iris-accented (the AI/quality cue), capability-aware, and dismissible.
+ */
+@Composable
+private fun QualityBanner(
+    cap: DeviceCapability,
+    missing: List<ModelSpec>,
+    onOpen: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val c = AppTheme.colors
+    val t = AppTheme.type
+    val runnable = ModelCatalog.essentials.count { cap.canRun(it) }
+    val total = ModelCatalog.essentials.size
+    val device = cap.socModel?.takeIf { it.isNotBlank() } ?: "Your phone"
+    val ram = "%.0f GB".format(cap.totalRamMb / 1000.0)
+    Column(
+        Modifier.fillMaxWidth()
+            .clip(RoundedCornerShape(Radius.lg))
+            .background(Brush.verticalGradient(listOf(c.accentMagic.copy(alpha = 0.16f), c.surface1)))
+            .border(HairlineWidth, c.accentMagic.copy(alpha = 0.5f), RoundedCornerShape(Radius.lg))
+            .clickable(onClick = onOpen)
+            .padding(Space.lg),
+        verticalArrangement = Arrangement.spacedBy(Space.sm),
+    ) {
+        Text("✦  UNLOCK BEST QUALITY", style = t.micro, color = c.accentMagic)
+        Text(
+            "Works now with no downloads. Add on-device models for captions, reactions, faces, and sharper auto-cuts — nothing leaves your phone.",
+            style = t.body, color = c.textHi,
+        )
+        Row(horizontalArrangement = Arrangement.spacedBy(Space.xs)) {
+            missing.take(4).forEach { spec -> UnlockChip(featureShort(spec.feature)) }
+        }
+        Text(
+            if (runnable >= total) "$device · $ram — runs all of them."
+            else "$device · $ram — runs $runnable of $total.",
+            style = t.label, color = c.textMid,
+        )
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+            Text("Open Models →", style = t.label, color = c.accentMagic, modifier = Modifier.clickable(onClick = onOpen))
+            Text("Not now", style = t.label, color = c.textLow, modifier = Modifier.clickable(onClick = onDismiss))
+        }
+    }
+}
+
+@Composable
+private fun UnlockChip(label: String) {
+    val c = AppTheme.colors
+    val t = AppTheme.type
+    Text(
+        label, style = t.micro, color = c.accentMagic,
+        modifier = Modifier
+            .clip(RoundedCornerShape(Radius.sm))
+            .background(c.accentMagic.copy(alpha = 0.12f))
+            .padding(horizontal = Space.sm, vertical = 4.dp),
+    )
+}
+
+private fun featureShort(f: Feature): String = when (f) {
+    Feature.AUTO_CAPTIONS -> "Captions"
+    Feature.ROBUST_VAD -> "Clean speech"
+    Feature.LAUGHTER_DETECTION -> "Reactions"
+    Feature.FACE_TRACKING -> "Faces"
+    Feature.AESTHETIC_SCORING -> "Cinematic"
+    Feature.SEMANTIC_SELECTION -> "Smart titles"
+    else -> f.displayName
 }
 
 @Composable
