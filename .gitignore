@@ -9,5 +9,3 @@ local.properties
 captures/
 *.apk
 *.keystore
-# Downloaded ML models / proxies are never committed
-/models/
