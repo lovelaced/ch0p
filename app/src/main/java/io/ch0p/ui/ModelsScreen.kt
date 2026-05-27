@@ -1,5 +1,7 @@
 package io.ch0p.ui
 
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -54,6 +56,29 @@ fun ModelsScreen(onBack: () -> Unit) {
     var installed by remember { mutableStateOf(store.installed().map { it.id }.toSet()) }
     var downloadingId by remember { mutableStateOf<String?>(null) }
     var downloadProgress by remember { mutableFloatStateOf(0f) }
+    var pendingImport by remember { mutableStateOf<ModelSpec?>(null) }
+
+    // Import a model file from storage (for license-gated / unhosted models like NIMA or Gemma).
+    val importLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        val spec = pendingImport
+        pendingImport = null
+        if (uri == null || spec == null) return@rememberLauncherForActivityResult
+        scope.launch {
+            runCatching {
+                withContext(Dispatchers.IO) {
+                    context.contentResolver.openInputStream(uri)?.use { input ->
+                        store.fileFor(spec).outputStream().use { input.copyTo(it) }
+                    }
+                }
+            }
+            installed = store.installed().map { it.id }.toSet()
+        }
+    }
+
+    fun importModel(spec: ModelSpec) {
+        pendingImport = spec
+        importLauncher.launch(arrayOf("*/*"))
+    }
 
     fun startDownload(spec: ModelSpec) {
         downloadingId = spec.id
@@ -111,6 +136,7 @@ fun ModelsScreen(onBack: () -> Unit) {
                         downloading = downloadingId == spec.id,
                         progress = downloadProgress,
                         onDownload = { startDownload(spec) },
+                        onImport = { importModel(spec) },
                         onDelete = { store.delete(spec); installed = store.installed().map { it.id }.toSet() },
                     )
                 }
@@ -127,6 +153,7 @@ private fun ModelRow(
     downloading: Boolean,
     progress: Float,
     onDownload: () -> Unit,
+    onImport: () -> Unit,
     onDelete: () -> Unit,
 ) {
     val c = AppTheme.colors
@@ -159,7 +186,8 @@ private fun ModelRow(
                 installed -> Text("INSTALLED · DELETE", style = t.micro, color = c.success,
                     modifier = Modifier.clickable(onClick = onDelete))
                 !canRun -> Text("NEEDS ${spec.minRamMb / 1000}GB", style = t.micro, color = c.textLow)
-                spec.url == null -> Text("SOON", style = t.micro, color = c.textLow)
+                spec.url == null -> Text("IMPORT", style = t.micro, color = c.accentActive,
+                    modifier = Modifier.clickable(onClick = onImport))
                 else -> Text("DOWNLOAD", style = t.micro, color = c.accentActive,
                     modifier = Modifier.clickable(onClick = onDownload))
             }
