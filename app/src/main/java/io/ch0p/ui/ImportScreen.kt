@@ -45,6 +45,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import io.ch0p.analysis.AnalysisPipeline
 import io.ch0p.analysis.LlmEngine
+import io.ch0p.analysis.LoudnessNormalizer
 import io.ch0p.analysis.SemanticEditor
 import io.ch0p.analysis.Transcriber
 import io.ch0p.edit.AutoEditor
@@ -98,9 +99,10 @@ private sealed interface ImportUi {
         val whisperModelPath: String? = null,
         val captionSpans: List<LongRange> = emptyList(),
         val duckEnvelope: FloatArray = FloatArray(0),  // music gain over output time (for ducking)
+        val loudnessGain: Float = 1f,                  // RMS makeup gain for loudness normalize
     ) : ImportUi
     data class Rendering(val presetName: String) : ImportUi
-    data class Rendered(val output: File) : ImportUi
+    data class Rendered(val output: File, val captionChunks: List<CaptionChunk> = emptyList()) : ImportUi
     data class Failed(val message: String) : ImportUi
 }
 
@@ -154,6 +156,7 @@ fun ImportScreen(initialVideo: Uri? = null, onOpenModels: () -> Unit = {}) {
     var editJob by remember { mutableStateOf<Job?>(null) }            // cancellable analysis pass
     var renderingFrom by remember { mutableStateOf<ImportUi.Edited?>(null) }  // return here on cancel
     var musicUri by remember { mutableStateOf<Uri?>(null) }           // optional user-picked music bed
+    var normalizeLoudness by remember { mutableStateOf(true) }        // loudness-normalize the output
     // Caption language choice for non-English transcripts (burn original vs. English translation).
     var captionEnglish by remember { mutableStateOf(false) }
     var englishChunks by remember { mutableStateOf<List<CaptionChunk>?>(null) }
@@ -198,6 +201,7 @@ fun ImportScreen(initialVideo: Uri? = null, onOpenModels: () -> Unit = {}) {
         format: VideoRenderer.OutputFormat,
         music: Uri?,
         duck: FloatArray,
+        normalizeGain: Float,
     ) {
         val src = sourceUri ?: run { ui = ImportUi.Failed("Lost the source file"); return }
         if (edl.units.isEmpty()) { ui = ImportUi.Failed("Nothing to render — the timeline is empty"); return }
@@ -207,9 +211,9 @@ fun ImportScreen(initialVideo: Uri? = null, onOpenModels: () -> Unit = {}) {
         runCatching {
             renderer.start(
                 src, edl, AspectRatio.parseOrDefault(preset.aspectRatio), cropTrajectory, captionChunks, format,
-                musicUri = music, duckEnvelope = duck,
+                musicUri = music, duckEnvelope = duck, normalizeGain = normalizeGain,
                 callback = object : VideoRenderer.Callback {
-                    override fun onComplete(output: File) { ui = ImportUi.Rendered(output) }
+                    override fun onComplete(output: File) { ui = ImportUi.Rendered(output, captionChunks) }
                     override fun onError(message: String, cause: Throwable?) { ui = ImportUi.Failed(message) }
                 },
             )
@@ -302,6 +306,7 @@ fun ImportScreen(initialVideo: Uri? = null, onOpenModels: () -> Unit = {}) {
                     // Music ducking envelope over OUTPUT time: quieter where the underlying
                     // clip has speech, louder in the gaps (used only if the user adds music).
                     val duck = duckEnvelope(edl, analysis.speech, meta.durationMs)
+                    val loudGain = LoudnessNormalizer.gainForSpans(proxy.absolutePath, spans)
                     analyzeStage = "Done"; analyzeProgress = 1f
                     ImportUi.Edited(
                         preset, edl, title, analysis.cropTrajectory, captions,
@@ -310,6 +315,7 @@ fun ImportScreen(initialVideo: Uri? = null, onOpenModels: () -> Unit = {}) {
                         whisperModelPath = whisper,
                         captionSpans = spans,
                         duckEnvelope = duck,
+                        loudnessGain = loudGain,
                     )
                 }
             }.getOrElse { ImportUi.Failed(it.message ?: "Analysis failed") }
@@ -371,6 +377,13 @@ fun ImportScreen(initialVideo: Uri? = null, onOpenModels: () -> Unit = {}) {
                 item { ImportButton { picker.launch(arrayOf("video/*")) } }
                 if (state is ImportUi.Failed) {
                     item { Notice(state.message, c.danger) }
+                    sourceUri?.let { uri ->
+                        item {
+                            Text("Retry", style = t.label, color = c.accentActive,
+                                modifier = Modifier.fillMaxWidth()
+                                    .clickable { haptics.scrubTick(); beginImport(uri) }.padding(Space.md))
+                        }
+                    }
                 }
             }
 
@@ -502,13 +515,23 @@ fun ImportScreen(initialVideo: Uri? = null, onOpenModels: () -> Unit = {}) {
                         onClear = { musicUri = null; haptics.scrubTick() },
                     )
                 }
+                item {
+                    Column(Modifier.padding(vertical = Space.sm), verticalArrangement = Arrangement.spacedBy(Space.xs)) {
+                        Text("AUDIO", style = t.micro, color = c.textMid)
+                        Row(horizontalArrangement = Arrangement.spacedBy(Space.sm)) {
+                            Choice("Normalize loudness", normalizeLoudness) { normalizeLoudness = true; haptics.scrubTick() }
+                            Choice("Original levels", !normalizeLoudness) { normalizeLoudness = false; haptics.scrubTick() }
+                        }
+                    }
+                }
                 item { FormatPicker(outputFormat, webmSupported) { fmt -> scope.launch { settings.setFormat(fmt.name) }; haptics.scrubTick() } }
                 item {
                     PrimaryButton(if (translating) "Translating…" else "Render ${outputFormat.name}") {
                         if (!translating) {
                             renderingFrom = state  // so Cancel returns to this edit
                             runRender(state.preset, state.edl, state.cropTrajectory, chosenChunks, outputFormat,
-                                music = musicUri, duck = state.duckEnvelope)
+                                music = musicUri, duck = state.duckEnvelope,
+                                normalizeGain = if (normalizeLoudness) state.loudnessGain else 1f)
                         }
                     }
                 }
@@ -557,11 +580,26 @@ fun ImportScreen(initialVideo: Uri? = null, onOpenModels: () -> Unit = {}) {
                 }
                 item {
                     Text(
-                        "Saved to app storage · ${formatBytes(state.output.length())}",
+                        "${formatBytes(state.output.length())} · in app storage",
                         style = t.body, color = c.textMid,
                     )
                 }
                 item { PrimaryButton("Share clip") { shareVideo(context, state.output) } }
+                item {
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(Space.md)) {
+                        Text("Save to gallery", style = t.label, color = c.accentActive,
+                            modifier = Modifier.weight(1f).clickable {
+                                val ok = saveToGallery(context, state.output)
+                                if (ok) haptics.confirm() else haptics.boundaryReject()
+                            }.padding(Space.md))
+                        if (state.captionChunks.isNotEmpty()) {
+                            Text("Export captions", style = t.label, color = c.accentMagic,
+                                modifier = Modifier.weight(1f).clickable {
+                                    shareSubtitles(context, state.captionChunks); haptics.scrubTick()
+                                }.padding(Space.md))
+                        }
+                    }
+                }
                 item {
                     Text(
                         "Edit another", style = t.label, color = c.textMid,
@@ -698,6 +736,43 @@ private fun shareVideo(context: android.content.Context, file: File) {
         addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
     }
     context.startActivity(Intent.createChooser(intent, "Share clip"))
+}
+
+/** Copy the rendered clip into the system gallery (Movies/ch0p) via MediaStore. */
+private fun saveToGallery(context: android.content.Context, file: File): Boolean = runCatching {
+    val resolver = context.contentResolver
+    val mime = if (file.extension.equals("webm", ignoreCase = true)) "video/webm" else "video/mp4"
+    val values = android.content.ContentValues().apply {
+        put(android.provider.MediaStore.Video.Media.DISPLAY_NAME, file.name)
+        put(android.provider.MediaStore.Video.Media.MIME_TYPE, mime)
+        put(android.provider.MediaStore.Video.Media.RELATIVE_PATH, "Movies/ch0p")
+        put(android.provider.MediaStore.Video.Media.IS_PENDING, 1)
+    }
+    val collection = android.provider.MediaStore.Video.Media.EXTERNAL_CONTENT_URI
+    val uri = resolver.insert(collection, values) ?: return@runCatching false
+    resolver.openOutputStream(uri)?.use { out -> file.inputStream().use { it.copyTo(out) } }
+    values.clear()
+    values.put(android.provider.MediaStore.Video.Media.IS_PENDING, 0)
+    resolver.update(uri, values, null, null)
+    true
+}.getOrDefault(false)
+
+/** Write the captions as an .srt sidecar and offer it via the share sheet. */
+private fun shareSubtitles(context: android.content.Context, chunks: List<CaptionChunk>) {
+    runCatching {
+        // Must live under filesDir/exports — the only path exposed by the FileProvider.
+        val dir = File(context.filesDir, "exports").apply { mkdirs() }
+        val file = File(dir, "captions.srt").apply {
+            writeText(io.ch0p.edit.captions.SubtitleWriter.toSrt(chunks))
+        }
+        val uri = androidx.core.content.FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
+        val intent = Intent(Intent.ACTION_SEND).apply {
+            type = "application/x-subrip"
+            putExtra(Intent.EXTRA_STREAM, uri)
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+        context.startActivity(Intent.createChooser(intent, "Export captions"))
+    }
 }
 
 private fun formatClock(ms: Long): String {

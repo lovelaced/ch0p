@@ -64,6 +64,7 @@ class VideoRenderer(private val context: Context) {
         musicUri: Uri? = null,
         duckEnvelope: FloatArray = FloatArray(0),
         duckEnvHz: Float = 20f,
+        normalizeGain: Float = 1f,
         callback: Callback,
     ): File {
         require(edl.units.isNotEmpty()) { "empty EDL" }
@@ -90,8 +91,13 @@ class VideoRenderer(private val context: Context) {
                     add(OverlayEffect(ImmutableList.of<TextureOverlay>(CaptionOverlay(captionChunks, entry.srcInMs))))
                 }
             }
+            val audioFx = if (normalizeGain != 1f) {
+                listOf<AudioProcessor>(NormalizeAudioProcessor(normalizeGain))
+            } else {
+                emptyList()
+            }
             EditedMediaItem.Builder(mediaItem)
-                .setEffects(Effects(emptyList(), videoEffects))
+                .setEffects(Effects(audioFx, videoEffects))
                 .build()
         }
 
